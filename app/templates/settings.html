@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% block content %}
+<div class="heading"><div><p class="eyebrow">SYSTEM SETTINGS</p><h1>تنظیمات سامانه و کاربران</h1><p class="muted">وضعیت اتصال پایگاه داده و کنترل‌های پایه حساب‌های کاربری</p></div></div>
+{% if notice %}<div class="alert success">{{ notice }}</div>{% endif %}{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+<div class="status"><span class="state {{ 'ok' if connected else 'off' }}">{{ '✓' if connected else '!' }}</span><div><strong>{{ 'اتصال موفق' if connected else 'اتصال ناموفق' }}</strong><p>{{ message }}</p></div><em>{{ 'CONNECTED' if connected else 'OFFLINE' }}</em></div>
+<div class="settings"><h2>تنظیمات اتصال به SQL Server</h2>
+<p class="muted">این فرم فقط برای مدیر فعال است. رمز عبور هنگام ذخیره‌سازی رمزگذاری می‌شود و دوباره در صفحه نمایش داده نخواهد شد. مقدار APP_SECRET_KEY در فایل .env باید ثابت و محرمانه بماند.</p>
+<form method="post" action="/settings/connection/test" class="user-create">
+<label>نام سرور یا Instance<input name="server" required placeholder="مثلاً ACCMASTER1 یا localhost\SQLEXPRESS" value=""></label>
+<label>نام دیتابیس<input name="database" required placeholder="FundamentalAnalysis" value=""></label>
+<label>روش احراز هویت<select name="auth_mode" id="auth_mode" onchange="document.getElementById('sql_credentials').style.display=this.value==='sql'?'grid':'none'"><option value="sql" selected>SQL Server (نام کاربری و رمز عبور)</option><option value="windows">Windows Authentication</option></select></label>
+<div id="sql_credentials" class="user-create"><label>نام کاربری SQL<input name="username" autocomplete="off" placeholder="sa"></label><label>رمز عبور SQL<input name="password" type="password" autocomplete="new-password" placeholder="رمز عبور SQL Server"></label></div>
+<label>درایور ODBC<select name="driver"><option>ODBC Driver 18 for SQL Server</option><option>ODBC Driver 17 for SQL Server</option></select></label>
+<label class="check"><input type="checkbox" name="trust_server_certificate" value="yes" checked> اعتماد به گواهی سرور (TrustServerCertificate)</label>
+<button class="primary" type="submit">آزمون اتصال</button></form>
+<form method="post" action="/settings/connection/save" class="user-create" onsubmit="return confirm('تنظیمات اتصال با رمز عبور رمزگذاری‌شده ذخیره شود؟');">
+<label>نام سرور یا Instance<input name="server" required placeholder="ACCMASTER1" value=""></label><label>نام دیتابیس<input name="database" required placeholder="FundamentalAnalysis" value=""></label>
+<label>روش احراز هویت<select name="auth_mode" onchange="document.getElementById('sql_credentials_save').style.display=this.value==='sql'?'grid':'none'"><option value="sql" selected>SQL Server</option><option value="windows">Windows Authentication</option></select></label>
+<div id="sql_credentials_save" class="user-create"><label>نام کاربری SQL<input name="username" autocomplete="off" placeholder="sa"></label><label>رمز عبور SQL<input name="password" type="password" autocomplete="new-password" placeholder="رمز عبور SQL Server"></label></div>
+<label>درایور ODBC<select name="driver"><option>ODBC Driver 18 for SQL Server</option><option>ODBC Driver 17 for SQL Server</option></select></label><label class="check"><input type="checkbox" name="trust_server_certificate" value="yes" checked> اعتماد به گواهی سرور</label>
+<button class="primary" type="submit">ذخیره تنظیمات اتصال</button></form>
+<p class="muted">وضعیت تنظیمات: <b>{{ 'ذخیره‌شده در برنامه' if saved_in_app else ('موجود در فایل .env' if configured else 'تنظیم نشده') }}</b>. آزمون اتصال و ذخیره‌سازی دو عملیات جداگانه‌اند. پس از ذخیره، وضعیت اتصال در بالای صفحه قابل مشاهده است.</p></div>
+{% if is_admin %}
+<div class="section"><h2>ایجاد کاربر</h2><small>فقط مدیر سامانه به این بخش دسترسی دارد.</small></div>
+<div class="settings"><form method="post" action="/settings/users/create" class="user-create"><label>نام کاربری<input name="username" minlength="3" maxlength="50" pattern="[A-Za-z0-9_-]+" required></label><label>رمز اولیه (حداقل ۱۰ نویسه)<input name="password" type="password" minlength="10" required></label><label class="check"><input type="checkbox" name="force_change_on_first_login" value="yes" checked> اجبار تغییر رمز در اولین ورود</label><button class="primary" type="submit">ایجاد کاربر</button></form><p class="muted">رمز اولیه هنگام ایجاد کاربر تعیین می‌شود و به‌صورت هش‌شده ذخیره خواهد شد. نام کاربری فقط شامل حروف انگلیسی، عدد، خط تیره و زیرخط باشد.</p></div>
+<div class="section"><h2>مدیریت کاربران</h2><small>تنظیم سیاست رمز، بازنشانی اجباری و فعال/غیرفعال‌سازی</small></div>
+<div class="tablewrap"><table><thead><tr><th>نام کاربری</th><th>نقش</th><th>وضعیت</th><th>اجبار تغییر رمز در اولین ورود</th><th>تغییر رمز در ورود بعدی</th><th>عملیات</th></tr></thead><tbody>
+{% for u in users %}<tr><td>{{ u['username'] }}</td><td>{{ 'مدیر' if u['role']=='ADMIN' else 'کاربر' }}</td><td>{{ 'فعال' if u['is_active'] else 'غیرفعال' }}</td><td><form method="post" action="/settings/users/{{ u['user_id'] }}/policy" class="inline-form"><select name="force_change_on_first_login"><option value="yes" {{ 'selected' if u['force_change_on_first_login'] else '' }}>فعال</option><option value="no" {{ 'selected' if not u['force_change_on_first_login'] else '' }}>غیرفعال</option></select><button type="submit">ذخیره</button></form></td><td><form method="post" action="/settings/users/{{ u['user_id'] }}/reset-password"><button type="submit">اجباری‌کردن</button></form></td><td><form method="post" action="/settings/users/{{ u['user_id'] }}/active" class="inline-form"><input type="hidden" name="active" value="{{ 'no' if u['is_active'] else 'yes' }}"><button type="submit" {{ 'disabled' if u['user_id']==user['user_id'] and u['is_active'] else '' }}>{{ 'غیرفعال‌سازی' if u['is_active'] else 'فعال‌سازی' }}</button></form></td></tr>{% endfor %}
+</tbody></table></div>
+<div class="note">تفاوت دو گزینه: «اجبار تغییر رمز در اولین ورود» سیاست پیش‌فرض حساب برای ورودهای اولیه است؛ «اجباری‌کردن» حساب را ملزم می‌کند در ورود بعدی رمز خود را تغییر دهد. غیرفعال‌کردن کاربر مانع ورودهای بعدی او می‌شود. این نسخه هنوز محدودیت تلاش ناموفق ورود و تنظیم زمان انقضای نشست را پیاده‌سازی نکرده است.</div>
+{% else %}<div class="note">مدیریت کاربران فقط برای حساب مدیر سامانه در دسترس است.</div>{% endif %}
+{% endblock %}

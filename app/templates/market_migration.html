@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block content %}
+<div class="heading"><div><p class="eyebrow">SQL SERVER DATA TRANSFER</p><h1>انتقال اطلاعات بازار به SQL Server</h1><p class="muted">انتقال از SQLite محلی برنامه به دو جدول dbo.MarketSymbols و dbo.MarketDailyData؛ مستقل از جداول مالی.</p></div></div>
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if result %}<div class="alert success">انتقال پایان یافت. نمادهای جدید: {{ result.inserted_symbols }}؛ نمادهای از قبل موجود: {{ result.skipped_symbols }}؛ رکوردهای بازار جدید: {{ result.inserted_daily }}؛ رکوردهای بازار از قبل منتقل‌شده: {{ result.skipped_daily }}.</div>{% endif %}
+{% if counts %}<div class="settings"><h2>پیش‌نمایش وضعیت</h2><table><thead><tr><th>نوع اطلاعات</th><th>تعداد محلی</th><th>تعداد در SQL Server</th><th>دارای شناسه انتقال محلی</th></tr></thead><tbody>
+<tr><td>نمادها و شرکت‌ها</td><td>{{ counts.symbols }}</td><td>{{ counts.symbols_destination }}</td><td>{{ counts.symbols_already_imported }}</td></tr>
+<tr><td>اطلاعات قیمت و معاملات</td><td>{{ counts.daily }}</td><td>{{ counts.daily_destination }}</td><td>{{ counts.daily_already_imported }}</td></tr>
+</tbody></table><p class="muted">این صفحه پیش‌نمایش تعداد رکوردهاست. انتقال فقط درج رکوردهای جدید انجام می‌دهد؛ رکوردهای محلی حذف نمی‌شوند و مقادیر بازار به‌صورت متن اصلی منتقل می‌شوند.</p>
+<form method="post" action="/symbols/sql-migration" onsubmit="return confirm('انتقال رکوردهای محلی جدید به SQL Server انجام شود؟ اطلاعات محلی حذف نمی‌شود.');"><input type="hidden" name="confirm_transfer" value="yes"><button class="primary" type="submit">انتقال رکوردهای جدید به SQL Server</button></form>
+</div>{% endif %}
+<div class="settings"><p><a href="/symbols">بازگشت به مدیریت نمادها</a></p><p class="muted">اگر جدول‌های مقصد وجود نداشته باشند یا رابطه یک رکورد بازار با نماد آن برقرار نباشد، انتقال متوقف می‌شود. در صورت خطا، تراکنش SQL Server بازگردانی می‌شود.</p></div>
+{% endblock %}

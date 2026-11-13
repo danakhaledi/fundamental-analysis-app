@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block content %}
+<div class="heading"><div><p class="eyebrow">DATA EXPLORER</p><h1>{{ title }}</h1><p class="muted">منبع داده: <code>{{ view }}</code></p></div><a class="chip" href="/">بازگشت به داشبورد</a></div>
+{% if error %}<div class="alert warning">{{ error }}</div>{% endif %}
+{% if columns %}<div class="section"><h2>پیش‌نمایش داده‌ها</h2><small>{{ rows|length }} ردیف · حداکثر ۱۰۰ ردیف</small></div><div class="tablewrap"><table><thead><tr>{% for c in columns %}<th>{{ c }}</th>{% endfor %}</tr></thead><tbody>{% for row in rows %}<tr>{% for v in row %}<td>{{ v if v is not none else '—' }}</td>{% endfor %}</tr>{% else %}<tr><td colspan="{{ columns|length }}">داده‌ای در این View وجود ندارد.</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><h3>داده‌ای برای نمایش در دسترس نیست</h3><p>پس از برقراری اتصال و تأیید دسترسی به View، اطلاعات نمایش داده می‌شود.</p></div>{% endif %}
+{% endblock %}

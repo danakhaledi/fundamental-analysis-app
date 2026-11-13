@@ -1,0 +1,205 @@
+{% extends "base.html" %}{% block content %}
+<div class="heading"><div><p class="eyebrow">CODAL DATA CENTER</p><h1>مرکز دریافت گزارش‌های کدال</h1><p class="muted">جست‌وجو، دانلود و استخراج گزارش‌ها و ثبت خودکار اطلاعات محصولات، فروش و منابع در پایگاه داده.</p></div></div>
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if result %}
+<div class="alert success">
+{% if result.operation == 'search' %}جست‌وجو انجام شد و {{ result.found }} گزارش جدید/به‌روزشده در فهرست ماندگار ثبت شد. وضعیت دانلود و استخراج گزارش‌های قبلی حفظ شده است.
+{% elif result.operation == 'download_extract' %}دانلود و استخراج پایان یافت؛ استخراج موفق: {{ result.extracted|length }}، خطا: {{ result.failed|length }}، قبلاً استخراج‌شده: {{ result.already_done }}.{% if result.export_name %} <a href="/codal/export/{{ result.export_name }}">دریافت خروجی JSON همین اجرا</a>{% endif %}
+{% elif result.operation == 'stage_products' %}دریافت محصولات و مواد پایان یافت؛ ردیف: {{ result.product.total_rows }}، معتبر: {{ result.product.valid_rows }}، نیازمند بررسی: {{ result.product.invalid_rows }}، محصول جدید: {{ result.product.products_created }}، نگاشت جدید: {{ result.product.mappings_added }}، خطای گزارش: {{ result.failed|length }}، قبلاً موفق: {{ result.already_done }}.
+{% elif result.operation == 'stage_sales' %}ثبت تولید و فروش پایان یافت؛ ردیف: {{ result.sales.total_rows }}، معتبر: {{ result.sales.valid_rows }}، نیازمند بررسی: {{ result.sales.invalid_rows }}، منتقل‌شده به جدول اصلی: {{ result.sales.transferred_rows }}، خطای گزارش: {{ result.failed|length }}، قبلاً موفق: {{ result.already_done }}.
+{% elif result.operation == 'stage_resources' %}ثبت خرید و مصرف پایان یافت؛ ردیف: {{ result.resource.total_rows }}، معتبر: {{ result.resource.valid_rows }}، نیازمند بررسی: {{ result.resource.invalid_rows }}، منتقل‌شده به جدول اصلی: {{ result.resource.transferred_rows }}، خطای گزارش: {{ result.failed|length }}، قبلاً موفق: {{ result.already_done }}.
+{% endif %}
+{% if result.message %}<p>{{ result.message }}</p>{% endif %}
+</div>
+{% if result.failed %}<div class="settings"><h3>خطاهای این مرحله</h3><ul>{% for x in result.failed %}<li><strong>{{ x.symbol or x.Symbol or 'نماد نامشخص' }}</strong> — {{ x.title or '' }} — کد پیگیری: {{ x.tracing_no or '' }} — {{ x.stage or '' }}: {{ x.error or x.reason or '' }}</li>{% endfor %}</ul></div>{% endif %}
+{% set op_summary = result.product if result.operation == 'stage_products' else (result.sales if result.operation == 'stage_sales' else result.resource if result.operation == 'stage_resources' else none) %}
+{% if op_summary and op_summary.summaries %}<div class="tablewrap"><table><thead><tr><th>نماد</th><th>شناسه گزارش</th><th>کل ردیف</th><th>معتبر</th><th>نیازمند بررسی</th><th>محصول جدید</th><th>نگاشت جدید</th><th>انتقال به جدول اصلی</th></tr></thead><tbody>{% for x in op_summary.summaries %}<tr><td>{{ x.symbol }}</td><td>{{ x.tracing_no }}</td><td>{{ x.rows }}</td><td>{{ x.valid }}</td><td>{{ x.invalid }}</td><td>{{ x.products_created if x.products_created is defined else '—' }}</td><td>{{ x.mappings_added if x.mappings_added is defined else '—' }}</td><td>{{ x.transferred if x.transferred is defined else '—' }}</td></tr>{% endfor %}</tbody></table></div>{% for x in op_summary.summaries if x.issues %}<details class="settings"><summary>{{ x.symbol }} — جزئیات ردیف‌های نیازمند بررسی ({{ x.issues|length }})</summary><ul>{% for issue in x.issues %}<li>{{ issue.sheet }}، ردیف {{ issue.row_no }}، {{ issue.name }}: {{ issue.message }}</li>{% endfor %}</ul></details>{% endfor %}{% endif %}
+{% endif %}
+{% if workflow_summary %}<div class="settings"><h2>وضعیت ماندگار گردش کار کدال</h2><div class="actions"><span>گزارش‌ها: <strong>{{ workflow_summary.total }}</strong></span><span>دانلود موفق: <strong>{{ workflow_summary.downloaded }}</strong></span><span>خطای دانلود: <strong>{{ workflow_summary.download_failed }}</strong></span><span>استخراج موفق: <strong>{{ workflow_summary.extracted }}</strong></span><span>خطای استخراج: <strong>{{ workflow_summary.extract_failed }}</strong></span><span>محصولات/مواد موفق: <strong>{{ workflow_summary.product_success }}</strong></span><span>خطای محصولات/مواد: <strong>{{ workflow_summary.product_failed }}</strong></span><span>فروش موفق: <strong>{{ workflow_summary.sales_success }}</strong></span><span>خطای فروش: <strong>{{ workflow_summary.sales_failed }}</strong></span><span>خرید/مصرف موفق: <strong>{{ workflow_summary.resource_staged }}</strong></span><span>خطای خرید/مصرف: <strong>{{ workflow_summary.resource_failed }}</strong></span></div><small class="muted">وضعیت هر گزارش و هر عملیات در SQL Server ذخیره می‌شود و پس از راه‌اندازی مجدد نیز باقی می‌ماند.</small></div>{% endif %}
+<div class="settings"><h2>۱. جست‌وجوی گزارش‌ها</h2><p class="muted">نمادها از فهرست مدیریت نمادها بارگذاری می‌شوند. انتخاب نماد اختیاری است؛ اگر نمادی انتخاب نکنید، تمام نمادها در جست‌وجوی عمومی کدال پوشش داده می‌شوند و سامانه همه صفحات نتایج را تا پایان دریافت می‌کند. این جست‌وجو ممکن است زمان‌بر باشد.</p>
+<form method="post" action="/codal" class="user-create">
+<div class="field" style="min-width:300px; flex:1; position:relative">
+<label for="symbolDropdownButton">نمادها</label>
+<button type="button" id="symbolDropdownButton" class="select-like" aria-expanded="false" aria-controls="symbolDropdownPanel" style="width:100%; text-align:right; display:flex; justify-content:space-between; align-items:center"><span id="symbolDropdownLabel">انتخاب نمادها...</span><span>▾</span></button>
+<div id="symbolDropdownPanel" class="settings" hidden style="position:absolute; z-index:20; top:calc(100% + 4px); right:0; left:0; width:100%; max-width:100%; box-sizing:border-box; max-height:420px; overflow:auto; background:var(--card, #fff); box-shadow:0 8px 24px rgba(0,0,0,.15)">
+<label for="symbolFilter">جست‌وجو در نمادها</label>
+<input id="symbolFilter" type="text" placeholder="نماد، نام شرکت یا تابلو را تایپ کنید" style="width:100%">
+<div id="symbolOptions" style="margin-top:8px"></div>
+<div class="actions" style="margin-top:8px">
+<button type="button" id="prevSymbols">صفحه قبل</button><span id="symbolPageInfo" class="muted">صفحه ۱</span><button type="button" id="nextSymbols">صفحه بعد</button>
+<button type="button" id="clearSymbols">لغو انتخاب</button><button type="button" id="closeSymbolDropdown">بستن</button>
+</div></div>
+<div id="selectedSymbolInputs"></div>
+<div id="selectedSymbolsInfo" class="muted">هنوز نمادی انتخاب نشده است.</div>
+<small class="muted">فهرست از «مدیریت نمادها» بارگذاری می‌شود. برای انتخاب چند نماد، گزینه‌ها را علامت بزنید.</small>
+</div>
+<label>نوع گزارش<select name="kind"><option value="monthly" {{ 'selected' if kind=='monthly' else '' }}>فعالیت ماهانه</option><option value="financial" {{ 'selected' if kind=='financial' else '' }}>صورت‌های مالی</option><option value="both" {{ 'selected' if kind=='both' else '' }}>هر دو نوع</option></select></label>
+<label>گزارش‌های منتشرشده از تاریخ (شمسی)<input name="from_date" type="text" value="{{ from_date or '' }}" placeholder="مثلاً 1405/06/31" pattern="[0-9۰-۹٠-٩]{4}[/.-][0-9۰-۹٠-٩]{1,2}[/.-][0-9۰-۹٠-٩]{1,2}" title="تاریخ شمسی به شکل 1405/06/31؛ گزارش‌های همان تاریخ و بعد از آن دریافت می‌شوند"></label>
+<label>تعداد ردیف در هر صفحه<select name="page_size">{% for n in [50,100,150,200] %}<option value="{{ n }}" {{ 'selected' if page_size==n else '' }}>{{ n }} ردیف</option>{% endfor %}</select></label>
+
+<div class="actions"><button class="primary" name="action" value="search">جست‌وجو</button></div></form></div>
+{% if reports %}
+<div class="section"><h2>۲. فهرست دائمی گزارش‌های پیدا‌شده</h2><small>تعداد کل گزارش‌های ثبت‌شده: {{ total_reports }}؛ نمایش صفحه {{ page_no }} از {{ page_count }} با {{ page_size }} ردیف در هر صفحه. انتخاب گزارش‌ها برای هر عملیات مستقل است؛ در صورت عدم انتخاب، عملیات روی تمام گزارش‌های واجد شرایط اجرا می‌شود.</small></div>
+<form method="get" action="/codal" class="actions" style="justify-content:flex-start;margin:8px 0">
+<input type="hidden" name="page_no" value="1">
+<label>ردیف در هر صفحه<select name="page_size" onchange="this.form.submit()">{% for n in [50,100,150,200] %}<option value="{{ n }}" {{ 'selected' if page_size==n else '' }}>{{ n }}</option>{% endfor %}</select></label>
+</form>
+{% if is_admin %}<form method="post" action="/codal"><input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="page_size" value="{{ page_size }}"><input type="hidden" name="from_date" value="{{ from_date or '' }}">
+<div class="actions" style="margin:12px 0;flex-wrap:wrap">
+<button class="primary" name="action" value="download_extract" type="submit" onclick="return confirm('دانلود و استخراج گزارش‌های انتخاب‌شده انجام شود؟ فایل‌های دانلودشده و گزارش‌های استخراج‌شده قبلی دوباره پردازش نمی‌شوند.');">دانلود و استخراج گزارش‌ها</button>
+<button class="primary" name="action" value="stage_products" type="submit" onclick="return confirm('بررسی و ثبت اطلاعات محصولات و مواد انجام شود؟');">۱. دریافت محصولات/مواد</button>
+<button class="primary" name="action" value="stage_sales" type="submit" onclick="return confirm('دریافت و ثبت اطلاعات تولید و فروش ماهانه انجام شود؟');">۲. دریافت تولید/فروش</button>
+<button class="primary" name="action" value="stage_resources" type="submit" onclick="return confirm('دریافت و ثبت اطلاعات خرید و مصرف انجام شود؟');">۳. دریافت خرید/مصرف</button>
+<button type="button" id="selectAllCodal">انتخاب همه این صفحه</button><button type="button" id="clearAllCodal">لغو انتخاب</button></div>
+<div class="tablewrap"><table id="codalResultsTable" data-searchable-table="manual"><thead>
+<tr><th><label style="display:block"><input type="checkbox" id="selectAllCodalHeader"> انتخاب</label><button type="button" id="clearCodalFilters" class="small">پاک‌کردن فیلترها</button></th>
+<th><div class="codal-heading">نماد</div><div class="codal-filter"><div class="codal-searchbox"><select data-filter-op="1"><option value="contains">شامل</option><option value="equals">مساوی</option><option value="not_equals">مخالف</option><option value="starts">شروع</option><option value="ends">پایان</option></select><input data-filter-value="1" placeholder="فیلتر نماد"></div></div></th>
+<th>نوع</th><th>عنوان گزارش</th><th>تاریخ انتشار</th><th>دانلود</th><th>استخراج</th><th>محصولات/مواد</th><th>تولید/فروش</th><th>خرید/مصرف</th><th>شناسه کدال</th></tr></thead><tbody>
+{% for r in reports %}<tr class="codal-result-row"><td><input type="checkbox" name="selected_traces" value="{{ r.TracingNo }}"></td><td>{{ r.Symbol }}</td><td>{{ 'فعالیت ماهانه' if r.Kind=='MONTHLY_ACTIVITY' else 'صورت‌های مالی' }}</td><td>{{ r.Title }}</td><td>{{ r.PublishDate }}</td>
+<td><span class="status-{{ r.DownloadStatus|lower }}">{{ 'موفق' if r.DownloadStatus=='SUCCESS' else ('خطا' if r.DownloadStatus=='FAILED' else 'در انتظار') }}</span>{% if r.DownloadError %}<details><summary>علت خطا</summary>{{ r.DownloadError }}</details>{% endif %}</td>
+<td><span class="status-{{ r.ExtractStatus|lower }}">{{ 'موفق' if r.ExtractStatus=='SUCCESS' else ('خطا' if r.ExtractStatus=='FAILED' else 'در انتظار') }}</span>{% if r.ExtractError %}<details><summary>علت خطا</summary>{{ r.ExtractError }}</details>{% endif %}</td>
+<td><span class="status-{{ r.ProductStatus|lower }}">{{ 'موفق' if r.ProductStatus=='SUCCESS' else ('خطا/بررسی' if r.ProductStatus=='FAILED' else 'در انتظار') }}</span>{% if r.ProductError %}<details><summary>جزئیات خطا</summary>{{ r.ProductError }}{% if r.ProductResult and r.ProductResult.issues %}<ul>{% for issue in r.ProductResult.issues %}<li>{{ issue.sheet }}، ردیف {{ issue.row_no }}، {{ issue.name }}: {{ issue.message }}</li>{% endfor %}</ul>{% endif %}</details>{% endif %}</td>
+<td><span class="status-{{ r.SalesStatus|lower }}">{{ 'موفق' if r.SalesStatus=='SUCCESS' else ('خطا/بررسی' if r.SalesStatus=='FAILED' else 'در انتظار') }}</span>{% if r.SalesError %}<details><summary>جزئیات خطا</summary>{{ r.SalesError }}{% if r.SalesResult and r.SalesResult.issues %}<ul>{% for issue in r.SalesResult.issues %}<li>{{ issue.sheet }}، ردیف {{ issue.row_no }}، {{ issue.name }}: {{ issue.message }}</li>{% endfor %}</ul>{% endif %}</details>{% endif %}</td>
+<td><span class="status-{{ r.ResourceStatus|lower }}">{{ 'موفق' if r.ResourceStatus=='SUCCESS' else ('خطا/بررسی' if r.ResourceStatus=='FAILED' else 'در انتظار') }}</span>{% if r.ResourceError %}<details><summary>جزئیات خطا</summary>{{ r.ResourceError }}{% if r.ResourceResult and r.ResourceResult.issues %}<ul>{% for issue in r.ResourceResult.issues %}<li>{{ issue.sheet }}، ردیف {{ issue.row_no }}، {{ issue.name }}: {{ issue.message }}</li>{% endfor %}</ul>{% endif %}</details>{% endif %}</td><td>{{ r.TracingNo }}</td></tr>{% endfor %}
+</tbody></table><div id="codalFilterSummary" class="muted" aria-live="polite" style="padding:8px 0"></div></div>
+<div class="actions" style="justify-content:center;margin-top:12px">
+{% if page_no > 1 %}<a class="button" href="/codal?page_no=1&page_size={{ page_size }}">اول</a><a class="button" href="/codal?page_no={{ page_no-1 }}&page_size={{ page_size }}">قبلی</a>{% endif %}
+<span class="muted">صفحه {{ page_no }} از {{ page_count }}</span>
+{% if page_no < page_count %}<a class="button" href="/codal?page_no={{ page_no+1 }}&page_size={{ page_size }}">بعدی</a><a class="button" href="/codal?page_no={{ page_count }}&page_size={{ page_size }}">آخر</a>{% endif %}
+</div></form>{% endif %}
+{% else %}<div class="settings"><p>هنوز گزارشی در فهرست دائمی ثبت نشده است. ابتدا جست‌وجو کنید؛ سپس دانلود و استخراج و سه عملیات ثبت اطلاعات را اجرا کنید.</p></div>{% endif %}
+<div class="settings"><h2>مدیریت خطاها</h2><p>جداول Stage و انتقال بین جداول به‌صورت خودکار در پشت سیستم انجام می‌شوند. در حالت عادی نیازی به مشاهده یا اجرای دستی Stage نیست. اگر گزارشی خطا داشته باشد، جزئیات آن در همان ردیف قابل مشاهده است؛ پس از اصلاح نگاشت یا داده مرجع، فقط همان عملیات ناموفق را دوباره اجرا کنید. گزارش‌های موفق دوباره ثبت نمی‌شوند.</p></div>
+<style>
+.status-success{color:#16803c;font-weight:700}.status-failed{color:#b42318;font-weight:700}.status-pending{color:#777}
+#codalResultsTable thead th{vertical-align:middle;background:var(--card, #fff);padding:7px;}
+#codalResultsTable .codal-heading{font-weight:700;display:inline-block;white-space:nowrap;margin-left:6px;}
+#codalResultsTable .codal-filter{display:inline-flex;vertical-align:middle;min-width:0;max-width:100%;}
+#codalResultsTable .codal-searchbox{position:relative;display:inline-flex;align-items:center;width:155px;max-width:100%;}
+#codalResultsTable .codal-searchbox input{width:155px!important;max-width:100%;padding-right:82px!important;border:1px solid var(--border,#bbb);border-radius:7px;}
+#codalResultsTable .codal-searchbox select{position:absolute;right:3px;top:3px;bottom:3px;width:76px;min-width:76px;max-width:76px;padding:2px;border:0;border-left:1px solid var(--border,#bbb);background:transparent;border-radius:0;font-size:11px;}
+#codalResultsTable .codal-filter input,#codalResultsTable .codal-filter select{box-sizing:border-box;min-width:70px;max-width:135px;width:auto;font-size:12px;padding:5px;}
+
+#codalResultsTable thead th:first-child{min-width:105px;}
+#clearCodalFilters{font-size:12px;padding:6px;}
+</style>
+<script>
+(function(){
+ const table=document.getElementById('codalResultsTable');
+ if(!table) return;
+ const rows=Array.from(table.querySelectorAll('tbody tr.codal-result-row'));
+ const selectAll=()=>table.querySelectorAll('input[name=selected_traces]:not(:disabled)').forEach(x=>x.checked=true);
+ const clearAll=()=>table.querySelectorAll('input[name=selected_traces]').forEach(x=>x.checked=false);
+ document.getElementById('selectAllCodal')?.addEventListener('click',selectAll);
+ document.getElementById('clearAllCodal')?.addEventListener('click',clearAll);
+ document.getElementById('selectAllCodalHeader')?.addEventListener('change',e=>{ if(e.target.checked) selectAll(); else clearAll(); });
+ const values=Array.from(table.querySelectorAll('[data-filter-value]'));
+ const operators=Array.from(table.querySelectorAll('[data-filter-op]'));
+ const summary=document.getElementById('codalFilterSummary');
+ const normalize=value=>String(value??'')
+  .replace(/[يى]/g,'ی').replace(/ك/g,'ک')
+  .replace(/[٠-٩]/g,d=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+  .replace(/[۰-۹]/g,d=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+  .replace(/[‐‑‒–—−]/g,'-').replace(/[\u200c\u200e\u200f]/g,' ')
+  .replace(/\s+/g,' ').trim().toLocaleLowerCase();
+ const compact=value=>normalize(value).replace(/[^a-z0-9\u0600-\u06ff]/g,'');
+ function matches(cell, query, op){
+   const value=normalize(cell), q=normalize(query);
+   if(!q) return true;
+   if(op==='equals') return value===q || compact(value)===compact(q);
+   if(op==='not_equals') return value!==q && compact(value)!==compact(q);
+   if(op==='starts') return value.startsWith(q) || compact(value).startsWith(compact(q));
+   if(op==='ends') return value.endsWith(q) || compact(value).endsWith(compact(q));
+   if(op==='after' || op==='before'){
+     const a=value.replace(/[.-]/g,'/'), b=q.replace(/[.-]/g,'/');
+     return op==='after' ? a>b : a<b;
+   }
+   return value.includes(q) || compact(value).includes(compact(q));
+ }
+ function applyFilters(){
+   const active=values.filter(x=>normalize(x.value));
+   let visible=0;
+   rows.forEach(row=>{
+     const show=active.every(input=>{
+       const col=Number(input.dataset.filterValue);
+       const op=table.querySelector('[data-filter-op="'+col+'"]')?.value||'contains';
+       return matches(row.cells[col]?.textContent||'',input.value,op);
+     });
+     row.hidden=!show;
+     if(show) visible++;
+   });
+   if(summary) summary.textContent='نمایش '+visible+' از '+rows.length+' گزارش';
+ }
+ values.forEach(input=>input.addEventListener('input',applyFilters));
+ operators.forEach(select=>select.addEventListener('change',applyFilters));
+ document.getElementById('clearCodalFilters')?.addEventListener('click',()=>{
+   values.forEach(x=>x.value=''); operators.forEach(x=>x.value='contains'); applyFilters();
+ });
+ applyFilters();
+})();
+</script>
+<script>
+(function(){
+ const allSymbols = {{ market_symbols|tojson }};
+ const initiallySelected = {{ selected_market_ids|default([])|tojson }};
+ const filter = document.getElementById('symbolFilter');
+ const optionsBox = document.getElementById('symbolOptions');
+ const panel = document.getElementById('symbolDropdownPanel');
+ const dropdownButton = document.getElementById('symbolDropdownButton');
+ const dropdownLabel = document.getElementById('symbolDropdownLabel');
+ const prev = document.getElementById('prevSymbols');
+ const next = document.getElementById('nextSymbols');
+ const pageInfo = document.getElementById('symbolPageInfo');
+ const selectedInfo = document.getElementById('selectedSymbolsInfo');
+ const hiddenInputs = document.getElementById('selectedSymbolInputs');
+ const clear = document.getElementById('clearSymbols');
+ const close = document.getElementById('closeSymbolDropdown');
+ if(!filter || !optionsBox) return;
+ const pageSize = 50;
+ let page = 0;
+ const selected = new Set((initiallySelected || []).map(String));
+ const get = (obj, key, index) => obj[key] !== undefined ? obj[key] : obj[index];
+ // Normalize Arabic Yeh/Kaf to Persian Yeh/Kaf for reliable Persian search.
+ const normalizeSearch = value => String(value ?? '')
+   .replace(/[يى]/g, 'ی').replace(/ك/g, 'ک')
+   .replace(/[\u200c\u200f\u200e]/g, ' ')
+   .replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+ function filtered(){
+   const q = normalizeSearch(filter.value);
+   return allSymbols.filter(x => normalizeSearch([get(x,'symbol',2), get(x,'company_name',3), get(x,'market_board',4)].join(' ')).includes(q));
+ }
+ function render(){
+   const rows = filtered();
+   const pageCount = Math.max(1, Math.ceil(rows.length/pageSize));
+   page = Math.min(page, pageCount-1);
+   const chunk = rows.slice(page*pageSize,(page+1)*pageSize);
+   optionsBox.innerHTML = '';
+   if(!chunk.length){ optionsBox.textContent='نمادی مطابق جست‌وجو پیدا نشد.'; }
+   chunk.forEach(x => {
+     const id = String(get(x,'symbol_id',0));
+     const symbol = get(x,'symbol',2) || '';
+     const company = get(x,'company_name',3) || '';
+     const label = document.createElement('label');
+     label.style.cssText='display:flex;align-items:flex-start;gap:8px;padding:7px 4px;border-bottom:1px solid #e5e7eb;cursor:pointer';
+     const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=selected.has(id); cb.value=id; cb.style.marginTop='4px';
+     cb.addEventListener('change',()=>{if(cb.checked) selected.add(id); else selected.delete(id); render();});
+     const text = document.createElement('span'); text.textContent=company ? (symbol+' — '+company) : symbol;
+     label.append(cb,text); optionsBox.appendChild(label);
+   });
+   pageInfo.textContent='صفحه '+(page+1)+' از '+pageCount+' — '+rows.length+' نماد';
+   prev.disabled=page<=0; next.disabled=page>=pageCount-1;
+   selectedInfo.textContent='تعداد نمادهای انتخاب‌شده: '+selected.size;
+   dropdownLabel.textContent=selected.size ? (selected.size+' نماد انتخاب شده') : 'انتخاب نمادها...';
+   hiddenInputs.innerHTML='';
+   selected.forEach(id=>{const input=document.createElement('input');input.type='hidden';input.name='market_symbol_ids';input.value=id;hiddenInputs.appendChild(input);});
+ }
+ dropdownButton.addEventListener('click',()=>{panel.hidden=!panel.hidden;dropdownButton.setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden)filter.focus();});
+ close.addEventListener('click',()=>{panel.hidden=true;dropdownButton.setAttribute('aria-expanded','false');});
+ filter.addEventListener('input',()=>{page=0;render();});
+ prev.addEventListener('click',()=>{if(page>0){page--;render();}});
+ next.addEventListener('click',()=>{page++;render();});
+ clear.addEventListener('click',()=>{selected.clear();render();});
+ document.addEventListener('click',e=>{if(!panel.hidden && !panel.contains(e.target) && !dropdownButton.contains(e.target)){panel.hidden=true;dropdownButton.setAttribute('aria-expanded','false');}});
+ render();
+})();
+</script>
+{% endblock %}

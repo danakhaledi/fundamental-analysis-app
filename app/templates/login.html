@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block auth_content %}
+<section class="login"><div class="logo">ف</div><p class="eyebrow">FUNDAMENTAL ANALYSIS</p><h1>ورود به سامانه</h1><p class="muted">برای ادامه، نام کاربری و کلمه عبور خود را وارد کنید.</p>
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+<form method="post" action="/login"><label>نام کاربری<input name="username" autocomplete="username" required autofocus></label><label>کلمه عبور<input name="password" type="password" autocomplete="current-password" required></label><button class="primary">ورود به سامانه　←</button></form>
+<div class="loginfoot">دسترسی فقط برای کاربران مجاز</div></section>{% endblock %}

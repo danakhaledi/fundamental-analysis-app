@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title or "سامانه تحلیل بنیادی بورس" }}</title><link rel="stylesheet" href="/static/style.css"></head><body>
+{% if user and request.url.path != "/change-password" %}
+<header class="top"><div class="brand"><b>ف</b><div><strong>تحلیل بنیادی بورس</strong><small>پنل داده و پیش‌بینی</small></div></div>
+<div class="user">کاربر: {{ user["username"] }} <form method="post" action="/logout"><button>خروج</button></form></div></header>
+<div class="layout"><aside class="nav"><small>فضای کاری</small>
+<a href="/">◫　داشبورد</a><a href="/sales">▤　فروش ماهانه</a><a href="/forecast">⌁　پیش‌بینی ۱۴۰۵</a><a href="/valuation">◈　ارزش‌گذاری</a><a href="/symbols">▦　مدیریت نمادها</a><a href="/codal">⇩　مرکز دریافت کدال</a><small class="management">مدیریت</small><a href="/settings">⚙　وضعیت اتصال</a>
+<div class="foot">نسخه اولیه · محیط داخلی</div></aside><main class="content">{% block content %}{% endblock %}</main></div>
+{% else %}<main class="auth">{% block auth_content %}{% endblock %}</main>{% endif %}
+<script>
+/* Shared table-search infrastructure: every table inside .tablewrap is searchable by default.
+   To opt out for a special-purpose table, add data-searchable-table="off". */
+(function(){
+ const normalize=value=>String(value??'')
+  .replace(/[يى]/g,'ی').replace(/ك/g,'ک')
+  .replace(/[٠-٩]/g,d=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+  .replace(/[۰-۹]/g,d=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+  .replace(/[‐‑‒–—−]/g,'-').replace(/[\u200c\u200e\u200f]/g,' ')
+  .replace(/\s+/g,' ').trim().toLocaleLowerCase();
+ const compact=value=>normalize(value).replace(/[^a-z0-9\u0600-\u06ff]/g,'');
+ const ops=[['contains','شامل'],['equals','مساوی'],['not_equals','مخالف'],['starts','شروع با'],['ends','پایان با']];
+ function match(cell,query,op){
+  const a=normalize(cell),b=normalize(query),ca=compact(cell),cb=compact(query);
+  if(!b)return true;
+  if(op==='equals')return a===b||ca===cb;
+  if(op==='not_equals')return a!==b&&ca!==cb;
+  if(op==='starts')return a.startsWith(b)||ca.startsWith(cb);
+  if(op==='ends')return a.endsWith(b)||ca.endsWith(cb);
+  return a.includes(b)||ca.includes(cb);
+ }
+ document.querySelectorAll('.tablewrap table:not([data-searchable-table="off"]):not([data-searchable-table="manual"])').forEach((table,tableNo)=>{
+  const head=table.tHead, body=table.tBodies[0];
+  if(!head||!head.rows.length||!body)return;
+  const headers=Array.from(head.rows[head.rows.length-1].cells);
+  const controls=[];
+  headers.forEach((th,col)=>{
+   if(th.dataset.noFilter==='true')return;
+   const original=th.textContent.trim(); if(!original)return;
+   const label=document.createElement('span'); label.className='shared-filter-heading';
+   while(th.firstChild)label.appendChild(th.firstChild);
+   th.appendChild(label);
+   const wrap=document.createElement('span');wrap.className='shared-filter-controls';
+   const select=document.createElement('select');select.setAttribute('aria-label','عملگر جست‌وجو: '+original);
+   ops.forEach(([v,t])=>{const o=document.createElement('option');o.value=v;o.textContent=t;select.appendChild(o)});
+   const input=document.createElement('input');input.type='search';input.placeholder='جست‌وجو';input.setAttribute('aria-label','جست‌وجو در '+original);
+   wrap.append(select,input);th.appendChild(wrap);controls.push({col,select,input});
+  });
+  if(!controls.length)return;
+  const summary=document.createElement('div');summary.className='shared-filter-summary muted';summary.setAttribute('aria-live','polite');table.parentElement.appendChild(summary);
+  const apply=()=>{
+   const active=controls.filter(c=>normalize(c.input.value));let count=0;
+   Array.from(body.rows).forEach(row=>{
+    const show=active.every(c=>match(row.cells[c.col]?.textContent||'',c.input.value,c.select.value));
+    row.hidden=!show;if(show)count++;
+   });summary.textContent='نمایش '+count+' از '+body.rows.length+' ردیف';
+  };
+  controls.forEach(c=>{c.input.addEventListener('input',apply);c.select.addEventListener('change',apply)});apply();
+ });
+})();
+</script>
+</body></html>

@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block content %}
+<div class="heading"><div><p class="eyebrow">OVERVIEW / BOUALI</p><h1>داشبورد مدیریتی</h1><p class="muted">نمای کلی سامانه داده‌های بنیادی و پیش‌بینی مالی</p></div><span class="chip">نسخه اولیه قابل اجرا</span></div>
+<div class="banner"><div><strong>خوش آمدید</strong><p>محیط کاری بوعلی سینا آماده بررسی است. از منوی کناری وارد صفحات داده و پیش‌بینی شوید.</p></div><span>↗</span></div>
+<div class="section"><h2>بخش‌های اصلی</h2><small>WORKSPACE</small></div><div class="cards">
+<a class="card" href="/sales"><i class="blue">▤</i><h3>فروش ماهانه</h3><p>مشاهده داده‌های فروش و تعدیلات ثبت‌شده در View اصلی.</p><b>مشاهده داده‌ها ←</b></a>
+<a class="card" href="/forecast"><i class="purple">⌁</i><h3>پیش‌بینی ۱۴۰۵</h3><p>مقادیر مؤثر مفروضات و خروجی محاسبات پیش‌بینی.</p><b>ورود به پیش‌بینی ←</b></a>
+<a class="card" href="/valuation"><i class="orange">◈</i><h3>ارزش‌گذاری</h3><p>نمایش داده‌های TTM و نسبت‌های ارزش‌گذاری موجود.</p><b>مشاهده ارزش‌گذاری ←</b></a></div>
+<div class="section"><h2>وضعیت اتصال داده</h2><a href="/settings">جزئیات اتصال ←</a></div>
+<div class="status"><span class="state {{ 'ok' if connected else 'off' }}">{{ '✓' if connected else '!' }}</span><div><strong>{{ 'SQL Server متصل است' if connected else 'اتصال SQL Server برقرار نیست' }}</strong><p>{{ message }}</p></div><em>{{ 'CONNECTED' if connected else 'NOT CONNECTED' }}</em></div>
+<div class="note">برنامه بدون اتصال SQL Server نیز اجرا می‌شود؛ برای نمایش مقادیر واقعی باید رشته اتصال در فایل <code>.env</code> تنظیم شود.</div>
+{% endblock %}
