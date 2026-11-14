@@ -23,13 +23,14 @@ class TSETMCRegistryParserTests(unittest.TestCase):
         payload = {
             "instrumentIdentity": {
                 "insCode": "123456",
-                "cComVal": "COMP-42",
+                "cComVal": "SHOULD-NOT-BE-USED",
+                "cSocCSAC": "ISSUER-42",
                 "sector": {"cSecVal": "27 ", "lSecVal": "فلزات اساسی"},
             }
         }
         self.assertEqual(parse_instrument_identity(payload, "123456"), {
             "ins_code": "123456",
-            "company_code": "COMP-42",
+            "company_code": "ISSUER-42",
             "industry_code": "27",
             "industry_name": "فلزات اساسی",
             "raw_json": __import__("json").dumps(payload, ensure_ascii=False),
@@ -45,16 +46,25 @@ class TSETMCRegistryParserTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_instrument_identity(payload, "123456")
 
-    def test_reject_conflicting_industry_codes(self):
+    def test_industry_code_is_read_only_from_sector_object(self):
         payload = {
             "instrumentIdentity": {
-                "cComVal": "COMP-42",
+                "cComVal": "SHOULD-NOT-BE-USED",
+                "cSocCSAC": "ISSUER-42",
+                "cSocCSAC": "ISSUER-42",
                 "sector": {"cSecVal": "27 ", "lSecVal": "فلزات اساسی"},
-                "other": {"cSecVal": "28", "lSecVal": "صنعت دیگر"},
             }
         }
+        parsed = parse_instrument_identity(payload, "123456")
+        self.assertEqual(parsed["industry_code"], "27")
+
+    def test_missing_industry_is_allowed_but_missing_cSocCSAC_is_not(self):
+        payload = {"instrumentIdentity": {"cSocCSAC": "ISSUER-42", "cComVal": "OTHER"}}
+        parsed = parse_instrument_identity(payload, "123456")
+        self.assertEqual(parsed["company_code"], "ISSUER-42")
+        self.assertEqual(parsed["industry_code"], "")
         with self.assertRaises(ValueError):
-            parse_instrument_identity(payload, "123456")
+            parse_instrument_identity({"instrumentIdentity": {"cComVal": "COMP-42"}}, "123456")
 
 
 if __name__ == "__main__":
