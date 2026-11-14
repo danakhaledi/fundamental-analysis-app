@@ -86,6 +86,7 @@ def describe_collisions(groups: dict, distinguish_fields: tuple[str, ...], limit
                         "ins_code": m["ins_code"],
                         "symbol": m["symbol"],
                         "company_name": m["company_name"],
+                        "local_company_name": m.get("local_company_name", ""),
                         "cComVal": m["cComVal"],
                         "industry_code": m["industry_code"],
                         "cSocCSAC": m["cSocCSAC"],
@@ -214,6 +215,8 @@ def main() -> int:
     composite_groups = index_groups(results, ("industry_code", "cComVal"))
     soccsac_groups = index_groups(results, ("cSocCSAC",))
     isin_groups = index_groups(results, ("cIsin",))
+    issuer_name_groups = index_groups(results, ("company_name",))
+    soccsac_name_groups = index_groups(results, ("cSocCSAC",))
 
     comval_cross_issuer = describe_collisions(
         comval_groups, ("cSocCSAC", "industry_code"), limit=40
@@ -226,6 +229,13 @@ def main() -> int:
     )
     isin_cross_issuer = describe_collisions(
         isin_groups, ("cSocCSAC",), limit=20
+    )
+    # Exact-string consistency checks only; no fuzzy name matching is used.
+    company_name_cross_soccsac = describe_collisions(
+        issuer_name_groups, ("cSocCSAC",), limit=100
+    )
+    soccsac_cross_company_name = describe_collisions(
+        soccsac_name_groups, ("company_name",), limit=100
     )
 
     unique_values = {
@@ -249,17 +259,23 @@ def main() -> int:
             "industry_plus_cComVal_collisions_across_cSocCSAC": len(composite_cross_issuer),
             "cSocCSAC_maps_to_multiple_industry_or_cComVal_pairs": len(soccsac_cross_industry),
             "cIsin_maps_to_multiple_cSocCSAC_values": len(isin_cross_issuer),
+            "company_name_maps_to_multiple_cSocCSAC_values": len(company_name_cross_soccsac),
+            "cSocCSAC_maps_to_multiple_company_names": len(soccsac_cross_company_name),
         },
         "collision_examples": {
             "cComVal": comval_cross_issuer,
             "industry_code_plus_cComVal": composite_cross_issuer,
             "cSocCSAC": soccsac_cross_industry,
             "cIsin": isin_cross_issuer,
+            "company_name_to_cSocCSAC": company_name_cross_soccsac,
+            "cSocCSAC_to_company_name": soccsac_cross_company_name,
         },
         "request_errors_sample": errors[:40],
         "identity_rows_sample": results[:30],
         "note": (
             "This is a diagnostic comparison, not proof of legal issuer identity. "
+            "Company-name checks use exact TSETMC company_name strings only; "
+            "they do not perform fuzzy matching. "
             "cIsin and instrumentID are instrument-level candidates unless TSETMC "
             "documentation establishes otherwise. No database rows were changed."
         ),
