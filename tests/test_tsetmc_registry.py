@@ -51,7 +51,6 @@ class TSETMCRegistryParserTests(unittest.TestCase):
             "instrumentIdentity": {
                 "cComVal": "SHOULD-NOT-BE-USED",
                 "cSocCSAC": "ISSUER-42",
-                "cSocCSAC": "ISSUER-42",
                 "sector": {"cSecVal": "27 ", "lSecVal": "فلزات اساسی"},
             }
         }
