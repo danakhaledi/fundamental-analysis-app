@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block content %}
+<div class="heading"><div><p class="eyebrow">TSETMC OFFICIAL REGISTRY</p><h1>پیش‌نمایش رجیستری شرکت‌ها و صنایع</h1><p class="muted">شناسه شرکت: cSocCSAC · بدون درج یا به‌روزرسانی در SQL Server</p></div></div>
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if preview %}
+<div class="settings"><h2>خلاصه بررسی</h2>
+<div class="tablewrap"><table><tbody>
+{% for key,value in preview.summary.items() %}<tr><th>{{ key }}</th><td>{{ value }}</td></tr>{% endfor %}
+</tbody></table></div>
+<p class="muted">دریافت شناسه‌ها: {{ preview.fetch.attempted }} درخواست؛ موفق در این نوبت: {{ preview.fetch.successfully_resolved }}؛ باقی‌مانده: {{ preview.fetch.remaining_identities }}.</p>
+{% if preview.companies_truncated %}<p class="muted">{{ preview.companies_truncated }} شرکت دیگر به علت محدودیت نمایش در جدول نیامده‌اند.</p>{% endif %}
+</div>
+<div class="settings"><h2>پیشنهادهای شرکت</h2><div class="tablewrap"><table><thead><tr><th>cSocCSAC</th><th>نمادها</th><th>کد صنعت</th><th>نام صنعت</th><th>اقدام پیشنهادی</th><th>CompanyID</th><th>ملاحظه</th></tr></thead><tbody>
+{% for row in preview.companies %}<tr><td>{{ row.cSocCSAC }}</td><td>{{ row.symbols }}</td><td>{{ row.industry_code }}</td><td>{{ row.industry_name }}</td><td>{{ row.action }}</td><td>{{ row.company_id }}</td><td>{{ row.issue }}</td></tr>{% endfor %}
+</tbody></table></div></div>
+{% endif %}
+<p><a class="button" href="/symbols">بازگشت به مدیریت نمادها</a></p>
+{% endblock %}
