@@ -264,20 +264,41 @@ def sync_tsetmc_registry(batch_size=500, max_workers=12):
                 else:
                     ordered = sorted((item[1] for item in entries), key=lambda row: (str(row["symbol"]), str(row["ins_code"])))
                     representative = ordered[0]
-                    cur.execute("SELECT CompanyID FROM dbo.Companies WHERE Symbol=?", representative["symbol"])
-                    symbol_owner = cur.fetchone()
-                    if symbol_owner:
+                    # First try to adopt a pre-existing Companies row by exact
+                    # representative-symbol identity, never by company-name similarity.
+                    matching_ids = set()
+                    for candidate in ordered:
+                        cur.execute("SELECT CompanyID,IndustryID,TSETMCCompanyCode FROM dbo.Companies WITH (UPDLOCK,HOLDLOCK) WHERE Symbol=?", candidate["symbol"])
+                        owner = cur.fetchone()
+                        if owner:
+                            matching_ids.add((int(owner[0]), int(owner[1]), str(owner[2] or "").strip()))
+                    if len(matching_ids) > 1:
                         symbol_conflicts += 1
-                        errors.append(f"Representative symbol {representative['symbol']} is already assigned to a company without matching TSETMCCompanyCode {company_code}.")
+                        errors.append(f"Company code {company_code}: TSETMC symbols map to multiple pre-existing Companies rows.")
                         continue
-                    names = [str(item[1]["company_name"] or "").strip() for item in entries]
-                    company_name = next((name for name in names if name), "") or str(representative["symbol"])
-                    cur.execute("""INSERT INTO dbo.Companies
-                        (Symbol,CompanyName,IndustryID,TSETMCCompanyCode,IsActive)
-                        OUTPUT INSERTED.CompanyID VALUES(?,?,?,?,1)""",
-                        representative["symbol"], company_name, industry_id, company_code)
-                    company_id = int(cur.fetchone()[0])
-                    inserted_companies += 1
+                    if matching_ids:
+                        owner_id, owner_industry, owner_code = next(iter(matching_ids))
+                        if owner_code and owner_code != company_code:
+                            symbol_conflicts += 1
+                            errors.append(f"Company code {company_code}: existing Companies row has a different official company code {owner_code}.")
+                            continue
+                        if owner_industry != industry_id:
+                            industry_conflicts += 1
+                            errors.append(f"Company code {company_code}: existing Companies row has an IndustryID conflicting with TSETMC.")
+                            continue
+                        cur.execute("UPDATE dbo.Companies SET TSETMCCompanyCode=?,IsActive=1 WHERE CompanyID=? AND TSETMCCompanyCode IS NULL",
+                                    company_code, owner_id)
+                        company_id = owner_id
+                        existing_companies += 1
+                    else:
+                        names = [str(item[1]["company_name"] or "").strip() for item in entries]
+                        company_name = next((name for name in names if name), "") or str(representative["symbol"])
+                        cur.execute("""INSERT INTO dbo.Companies
+                            (Symbol,CompanyName,IndustryID,TSETMCCompanyCode,IsActive)
+                            OUTPUT INSERTED.CompanyID VALUES(?,?,?,?,1)""",
+                            representative["symbol"], company_name, industry_id, company_code)
+                        company_id = int(cur.fetchone()[0])
+                        inserted_companies += 1
                 company_ids[company_code] = company_id
 
             for company_code, entries in grouped.items():
