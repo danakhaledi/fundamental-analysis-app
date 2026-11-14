@@ -22,9 +22,13 @@ IF COL_LENGTH(N'dbo.MarketSymbols', N'CompanyID') IS NULL
 GO
 
 IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes
-    WHERE object_id=OBJECT_ID(N'dbo.Companies')
-      AND name=N'UX_Companies_TSETMCCompanyCode'
+    SELECT 1
+    FROM sys.indexes i
+    INNER JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
+    INNER JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
+    WHERE i.object_id=OBJECT_ID(N'dbo.Companies')
+      AND i.is_unique=1 AND i.has_filter=1
+      AND c.name=N'TSETMCCompanyCode' AND ic.key_ordinal=1
 )
     CREATE UNIQUE INDEX UX_Companies_TSETMCCompanyCode
         ON dbo.Companies(TSETMCCompanyCode)
@@ -32,9 +36,13 @@ IF NOT EXISTS (
 GO
 
 IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes
-    WHERE object_id=OBJECT_ID(N'dbo.Companies')
-      AND name=N'UX_Companies_CompanyISIN'
+    SELECT 1
+    FROM sys.indexes i
+    INNER JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
+    INNER JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
+    WHERE i.object_id=OBJECT_ID(N'dbo.Companies')
+      AND i.is_unique=1 AND i.has_filter=1
+      AND c.name=N'CompanyISIN' AND ic.key_ordinal=1
 )
     CREATE UNIQUE INDEX UX_Companies_CompanyISIN
         ON dbo.Companies(CompanyISIN)
@@ -42,9 +50,13 @@ IF NOT EXISTS (
 GO
 
 IF NOT EXISTS (
-    SELECT 1 FROM sys.foreign_keys
-    WHERE parent_object_id=OBJECT_ID(N'dbo.MarketSymbols')
-      AND name=N'FK_MarketSymbols_Companies'
+    SELECT 1
+    FROM sys.foreign_key_columns fkc
+    INNER JOIN sys.columns pc ON pc.object_id=fkc.parent_object_id AND pc.column_id=fkc.parent_column_id
+    INNER JOIN sys.columns rc ON rc.object_id=fkc.referenced_object_id AND rc.column_id=fkc.referenced_column_id
+    WHERE fkc.parent_object_id=OBJECT_ID(N'dbo.MarketSymbols')
+      AND fkc.referenced_object_id=OBJECT_ID(N'dbo.Companies')
+      AND pc.name=N'CompanyID' AND rc.name=N'CompanyID'
 )
     ALTER TABLE dbo.MarketSymbols WITH CHECK
         ADD CONSTRAINT FK_MarketSymbols_Companies
@@ -52,9 +64,12 @@ IF NOT EXISTS (
 GO
 
 IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes
-    WHERE object_id=OBJECT_ID(N'dbo.MarketSymbols')
-      AND name=N'IX_MarketSymbols_CompanyID'
+    SELECT 1
+    FROM sys.indexes i
+    INNER JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id
+    INNER JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
+    WHERE i.object_id=OBJECT_ID(N'dbo.MarketSymbols')
+      AND c.name=N'CompanyID' AND ic.key_ordinal=1
 )
     CREATE INDEX IX_MarketSymbols_CompanyID
         ON dbo.MarketSymbols(CompanyID);
