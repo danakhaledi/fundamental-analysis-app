@@ -343,3 +343,74 @@ def sync_tsetmc_registry(batch_size=500, max_workers=12):
         "representative_symbol_conflicts": symbol_conflicts,
         "errors": errors[:30],
     }
+
+def preview_tsetmc_registry(batch_size=1000, max_workers=12):
+    """Read-only SQL Server preview; identity cache is refreshed locally."""
+    industries = fetch_industries()
+    fetch_result = _load_and_cache_identities(batch_size=batch_size, max_workers=max_workers)
+    with sqlite_connect() as db:
+        symbols = [dict(r) for r in db.execute(
+            "SELECT ins_code,symbol,company_name FROM market_symbols WHERE instrument_code_is_placeholder=0 AND ins_code GLOB '[0-9]*'").fetchall()]
+        identities = [dict(r) for r in db.execute(
+            "SELECT ins_code,company_code,industry_code,industry_name FROM tsetmc_identity_cache WHERE status='SUCCESS' AND company_key_source='cSocCSAC'").fetchall()]
+    cs = get_connection_string()
+    if not cs:
+        raise RuntimeError("اتصال SQL Server تنظیم نشده است.")
+    import pyodbc
+    with pyodbc.connect(cs, timeout=20) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT CompanyID,IndustryID,Symbol,CompanyName,TSETMCCompanyCode FROM dbo.Companies")
+        companies = [dict(zip(("CompanyID","IndustryID","Symbol","CompanyName","TSETMCCompanyCode"), r)) for r in cur.fetchall()]
+        cur.execute("SELECT IndustryID,IndustryCode,IndustryName FROM dbo.Industries")
+        db_industries = [dict(zip(("IndustryID","IndustryCode","IndustryName"), r)) for r in cur.fetchall()]
+        cur.execute("SELECT InsCode,CompanyID FROM dbo.MarketSymbols")
+        market = {str(r[0]): r[1] for r in cur.fetchall()}
+    symbols_by_ins = {str(r["ins_code"]): r for r in symbols}
+    industries_by_code = {str(r["IndustryCode"] or "").strip(): r for r in db_industries}
+    companies_by_key = {str(r["TSETMCCompanyCode"] or "").strip(): r for r in companies if r["TSETMCCompanyCode"]}
+    grouped = {}
+    for identity in identities:
+        key = str(identity["company_code"] or "").strip()
+        symbol = symbols_by_ins.get(str(identity["ins_code"]))
+        if key and symbol:
+            grouped.setdefault(key, []).append((identity, symbol))
+    details = []
+    counts = {"existing": 0, "insert": 0, "industry_conflict": 0, "industry_missing": 0,
+              "industry_unknown": 0, "symbol_link_conflict": 0, "linkable_symbols": 0}
+    for key, rows in sorted(grouped.items()):
+        codes = sorted({str(x[0]["industry_code"] or "").strip() for x in rows if x[0]["industry_code"]})
+        conflict = len(codes) > 1
+        code = codes[0] if len(codes) == 1 else ""
+        industry = industries_by_code.get(code)
+        existing = companies_by_key.get(key)
+        if conflict:
+            counts["industry_conflict"] += 1
+        elif not code:
+            counts["industry_missing"] += 1
+        elif not industry:
+            counts["industry_unknown"] += 1
+        action = "EXISTING" if existing else "INSERT"
+        counts["existing" if existing else "insert"] += 1
+        company_id = int(existing["CompanyID"]) if existing else None
+        issue = "تعارض کد صنعت؛ صنعت متصل نمی‌شود" if conflict else (
+            "کد صنعت موجود نیست؛ اتصال صنعت به تعویق می‌افتد" if not code else
+            "کد صنعت در جدول Industries یافت نشد" if not industry else "")
+        if existing and industry and existing["IndustryID"] is not None and int(existing["IndustryID"]) != int(industry["IndustryID"]):
+            issue = "IndustryID موجود با صنعت رسمی مغایرت دارد"
+            counts["industry_conflict"] += 1
+        ins_codes = sorted({str(x[0]["ins_code"]) for x in rows})
+        for ins in ins_codes:
+            current = market.get(ins)
+            if current is None or (company_id is not None and int(current) == company_id):
+                counts["linkable_symbols"] += 1
+            elif company_id is not None:
+                counts["symbol_link_conflict"] += 1
+                issue = "حداقل یک نماد از قبل به شرکت دیگری متصل است"
+        details.append({"cSocCSAC": key, "symbols": ", ".join(sorted({x[1]["symbol"] for x in rows})),
+                        "industry_code": code or "—", "industry_name": (industry["IndustryName"] if industry else "—"),
+                        "action": action, "company_id": company_id or "—", "issue": issue})
+    return {"summary": {"official_symbols": len(symbols), "identities_resolved": len(identities),
+                        "companies_detected": len(grouped), **counts,
+                        "identities_remaining": fetch_result["remaining_identities"]},
+            "fetch": fetch_result, "companies": details[:250],
+            "companies_truncated": max(0, len(details)-250)}
