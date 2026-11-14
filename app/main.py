@@ -22,6 +22,7 @@ from .codal_products_stage import stage_product_reports
 from .codal_sales_stage import stage_sales_reports
 from .codal_state import initialize as initialize_codal_state, upsert_search_results, list_reports as list_codal_state_reports, get_reports as get_codal_state_reports, update_report as update_codal_state_report, summary as codal_state_summary, migrate_legacy_files as migrate_legacy_codal_files
 from .market_symbols import fetch_all_symbols, resolve_official_symbols_batch
+from .tsetmc_registry import sync_tsetmc_registry
 from .historical_prices import history_status, sync_history_batch
 from .market_job_ui import read_log, task_status, configure_task, run_now, delete_task, LOG_FILE
 
@@ -298,6 +299,24 @@ def symbols_sync(request: Request):
                    f"نمادهای هنوز بررسی‌نشده: {resolution['unattempted_remaining']}؛ هم‌زمانی درخواست‌ها: {resolution.get('workers', 1)}.{sql_message}")
         if resolution.get("errors"):
             details += " خطاهای نمونه جست‌وجو: " + "؛ ".join(resolution["errors"])
+        try:
+            registry = sync_tsetmc_registry(batch_size=500, max_workers=12)
+            details += (
+                f" همگام‌سازی رجیستری رسمی TSETMC: {registry['industries_from_tsetmc']} صنعت دریافت شد، "
+                f"{registry['industries_inserted']} صنعت جدید، {registry['industries_updated']} صنعت به‌روزرسانی، "
+                f"{registry['companies_inserted']} شرکت جدید، {registry['companies_existing']} شرکت موجود، "
+                f"{registry['symbols_linked']} نماد به شرکت متصل شد؛ "
+                f"{registry['remaining_identities']} شناسه نماد هنوز تعیین تکلیف نشده است. "
+                f"تعارض صنعت: {registry['industry_conflicts']}، تعارض اتصال شرکت: "
+                f"{registry['company_link_conflicts']}، تعارض نماد نماینده: {registry['representative_symbol_conflicts']}."
+            )
+            if registry.get("errors"):
+                details += " موارد نیازمند بررسی: " + "؛ ".join(registry["errors"][:8])
+        except Exception as registry_exc:
+            details += (
+                f" همگام‌سازی صنایع و شرکت‌ها کامل نشد: "
+                f"{type(registry_exc).__name__}: {str(registry_exc)[:220]}"
+            )
         return page(request, "symbols.html", count=market_symbol_count(), notice=details, error=None,
                     is_admin=True)
     except Exception as exc:
