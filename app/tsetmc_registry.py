@@ -390,7 +390,7 @@ def preview_tsetmc_registry(batch_size=1000, max_workers=12):
             grouped.setdefault(key, []).append((identity, symbol))
     details = []
     counts = {"existing": 0, "insert": 0, "adopt": 0, "review": 0, "industry_conflict": 0, "industry_missing": 0,
-              "industry_to_insert": 0, "symbol_link_conflict": 0, "linkable_symbols": 0}
+              "industry_to_insert": 0, "industry_unknown": 0, "symbol_link_conflict": 0, "linkable_symbols": 0}
     for key, rows in sorted(grouped.items()):
         codes = sorted({str(x[0]["industry_code"] or "").strip() for x in rows if x[0]["industry_code"]})
         conflict = len(codes) > 1
@@ -402,6 +402,8 @@ def preview_tsetmc_registry(batch_size=1000, max_workers=12):
             counts["industry_conflict"] += 1
         elif not code:
             counts["industry_missing"] += 1
+        elif not official_industry_name:
+            counts["industry_unknown"] += 1
         elif not industry:
             counts["industry_to_insert"] += 1
         action = "EXISTING" if existing else "INSERT"
@@ -438,7 +440,7 @@ def preview_tsetmc_registry(batch_size=1000, max_workers=12):
             current = market.get(ins)
             if action != "REVIEW" and ins in market and (market[ins] is None or (company_id is not None and int(market[ins]) == company_id)):
                 counts["linkable_symbols"] += 1
-            elif ins in market and company_id is not None and market[ins] is not None:
+            elif ins in market and (market[ins] is not None) and (company_id is None or int(market[ins]) != company_id):
                 counts["symbol_link_conflict"] += 1
                 issue = "حداقل یک نماد از قبل به شرکت دیگری متصل است"
         details.append({"cSocCSAC": key, "symbols": ", ".join(symbol_names),
