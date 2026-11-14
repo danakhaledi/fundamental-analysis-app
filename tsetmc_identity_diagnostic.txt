@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "D:\HooshmandArgham\TechnicalClass\FundamentalData\fundamental_web_app_codal_v35\fundamental-analysis-app\diagnose_tsetmc_identity.py", line 88, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "D:\HooshmandArgham\TechnicalClass\FundamentalData\fundamental_web_app_codal_v35\fundamental-analysis-app\diagnose_tsetmc_identity.py", line 44, in main
+    rows = db.execute(
+           ~~~~~~~~~~^
+        f"""
+        ^^^^
+    ...<6 lines>...
+        requested,
+        ^^^^^^^^^^
+    ).fetchall()
+    ^
+sqlite3.OperationalError: no such table: market_symbols
