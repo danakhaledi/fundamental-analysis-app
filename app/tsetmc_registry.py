@@ -152,11 +152,11 @@ def _load_and_cache_identities(batch_size=500, max_workers=12):
                     identity["industry_name"], identity["raw_json"])
         total = db.execute("""SELECT COUNT(*) FROM market_symbols
             WHERE instrument_code_is_placeholder=0 AND ins_code GLOB '[0-9]*'""").fetchone()[0]
-        successful = db.execute("SELECT COUNT(*) FROM tsetmc_identity_cache WHERE status='SUCCESS'").fetchone()[0]
+        successful = db.execute("SELECT COUNT(*) FROM tsetmc_identity_cache WHERE status='SUCCESS' AND company_key_source='cSocCSAC'").fetchone()[0]
         remaining = db.execute("""SELECT COUNT(*) FROM market_symbols s
             LEFT JOIN tsetmc_identity_cache c ON c.ins_code=s.ins_code
             WHERE s.instrument_code_is_placeholder=0 AND s.ins_code GLOB '[0-9]*'
-              AND (c.ins_code IS NULL OR c.status<>'SUCCESS')""").fetchone()[0]
+              AND (c.ins_code IS NULL OR c.status<>'SUCCESS' OR c.company_key_source<>'cSocCSAC')""").fetchone()[0]
     return {
         "attempted": len(pending),
         "successfully_resolved": len(results) - sum(1 for _, error in results if error),
@@ -347,7 +347,21 @@ def sync_tsetmc_registry(batch_size=500, max_workers=12):
 def preview_tsetmc_registry(batch_size=1000, max_workers=12):
     """Read-only SQL Server preview; identity cache is refreshed locally."""
     industries = fetch_industries()
-    fetch_result = _load_and_cache_identities(batch_size=batch_size, max_workers=max_workers)
+    fetch_runs = []
+    for _ in range(3):
+        fetch_result = _load_and_cache_identities(batch_size=batch_size, max_workers=max_workers)
+        fetch_runs.append(fetch_result)
+        if fetch_result["remaining_identities"] == 0 or fetch_result["attempted"] == 0:
+            break
+    fetch_result = {
+        "attempted": sum(x["attempted"] for x in fetch_runs),
+        "successfully_resolved": sum(x["successfully_resolved"] for x in fetch_runs),
+        "total_official_symbols": fetch_runs[-1]["total_official_symbols"],
+        "cached_identities": fetch_runs[-1]["cached_identities"],
+        "remaining_identities": fetch_runs[-1]["remaining_identities"],
+        "errors": [e for x in fetch_runs for e in x["errors"]][:20],
+    }
+    official_industries = {str(x["industry_code"]): x["industry_name"] for x in industries}
     with sqlite_connect() as db:
         symbols = [dict(r) for r in db.execute(
             "SELECT ins_code,symbol,company_name FROM market_symbols WHERE instrument_code_is_placeholder=0 AND ins_code GLOB '[0-9]*'").fetchall()]
@@ -375,23 +389,44 @@ def preview_tsetmc_registry(batch_size=1000, max_workers=12):
         if key and symbol:
             grouped.setdefault(key, []).append((identity, symbol))
     details = []
-    counts = {"existing": 0, "insert": 0, "industry_conflict": 0, "industry_missing": 0,
-              "industry_unknown": 0, "symbol_link_conflict": 0, "linkable_symbols": 0}
+    counts = {"existing": 0, "insert": 0, "adopt": 0, "review": 0, "industry_conflict": 0, "industry_missing": 0,
+              "industry_to_insert": 0, "symbol_link_conflict": 0, "linkable_symbols": 0}
     for key, rows in sorted(grouped.items()):
         codes = sorted({str(x[0]["industry_code"] or "").strip() for x in rows if x[0]["industry_code"]})
         conflict = len(codes) > 1
         code = codes[0] if len(codes) == 1 else ""
         industry = industries_by_code.get(code)
+        official_industry_name = official_industries.get(code, "")
         existing = companies_by_key.get(key)
         if conflict:
             counts["industry_conflict"] += 1
         elif not code:
             counts["industry_missing"] += 1
-        elif not industry:
-            counts["industry_unknown"] += 1
+        elif not official_industry_name:
+            counts["industry_to_insert"] += 1
         action = "EXISTING" if existing else "INSERT"
-        counts["existing" if existing else "insert"] += 1
         company_id = int(existing["CompanyID"]) if existing else None
+        symbol_names = sorted({str(x[1]["symbol"] or "").strip() for x in rows if x[1]["symbol"]})
+        if existing:
+            counts["existing"] += 1
+        else:
+            owners = [c for c in companies if str(c["Symbol"] or "").strip() in symbol_names]
+            owner_ids = {int(c["CompanyID"]) for c in owners}
+            owner_keys = {str(c["TSETMCCompanyCode"] or "").strip() for c in owners if c["TSETMCCompanyCode"]}
+            if len(owner_ids) > 1 or (owner_keys and owner_keys != {key}):
+                action = "REVIEW"
+                counts["review"] += 1
+            elif owners:
+                owner = owners[0]
+                if owner["IndustryID"] is not None and industry and int(owner["IndustryID"]) != int(industry["IndustryID"]):
+                    action = "REVIEW"
+                    counts["review"] += 1
+                else:
+                    action = "ADOPT"
+                    company_id = int(owner["CompanyID"])
+                    counts["adopt"] += 1
+            else:
+                counts["insert"] += 1
         issue = "تعارض کد صنعت؛ صنعت متصل نمی‌شود" if conflict else (
             "کد صنعت موجود نیست؛ اتصال صنعت به تعویق می‌افتد" if not code else
             "کد صنعت در جدول Industries یافت نشد" if not industry else "")
@@ -406,8 +441,8 @@ def preview_tsetmc_registry(batch_size=1000, max_workers=12):
             elif company_id is not None:
                 counts["symbol_link_conflict"] += 1
                 issue = "حداقل یک نماد از قبل به شرکت دیگری متصل است"
-        details.append({"cSocCSAC": key, "symbols": ", ".join(sorted({x[1]["symbol"] for x in rows})),
-                        "industry_code": code or "—", "industry_name": (industry["IndustryName"] if industry else "—"),
+        details.append({"cSocCSAC": key, "symbols": ", ".join(symbol_names),
+                        "industry_code": code or "—", "industry_name": (industry["IndustryName"] if industry else official_industry_name or "—"),
                         "action": action, "company_id": company_id or "—", "issue": issue})
     return {"summary": {"official_symbols": len(symbols), "identities_resolved": len(identities),
                         "companies_detected": len(grouped), **counts,
