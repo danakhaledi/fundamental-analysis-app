@@ -54,32 +54,31 @@ def parse_industries(payload):
 
 
 def parse_instrument_identity(payload, ins_code):
-    """Extract official company and industry codes from an instrument identity response."""
-    dictionaries = list(_walk_dicts(payload))
-    company_codes = set()
-    industry_codes = set()
-    industry_names = set()
-    for row in dictionaries:
-        company_code = _clean_code(_value(row, "cComVal", "companyCode", "TSETMCCompanyCode"))
-        if company_code:
-            company_codes.add(company_code)
-        industry_code = _clean_code(_value(row, "cSecVal", "industryCode", "IndustryCode"))
-        if industry_code:
-            industry_codes.add(industry_code)
-        industry_name = str(_value(row, "lSecVal", "industryName", "IndustryName") or "").strip()
-        if industry_name:
-            industry_names.add(industry_name)
-    if len(company_codes) != 1:
-        raise ValueError(f"Instrument {ins_code}: expected one official company code, found {len(company_codes)}.")
-    if len(industry_codes) != 1:
-        raise ValueError(f"Instrument {ins_code}: expected one official industry code, found {len(industry_codes)}.")
-    if len(industry_names) > 1:
-        raise ValueError(f"Instrument {ins_code}: conflicting industry names in identity response.")
+    """Extract cSocCSAC as issuer key and sector.cSecVal as optional industry code.
+
+    cComVal, cIsin and instrumentID are deliberately not used as company keys.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError(f"Instrument {ins_code}: response root is not an object.")
+    identity = payload.get("instrumentIdentity")
+    if not isinstance(identity, dict):
+        raise ValueError(f"Instrument {ins_code}: instrumentIdentity object is missing.")
+
+    company_code = _clean_code(identity.get("cSocCSAC"))
+    if not company_code:
+        raise ValueError(f"Instrument {ins_code}: cSocCSAC is missing.")
+
+    sector = identity.get("sector")
+    if not isinstance(sector, dict):
+        sector = {}
+    industry_code = _clean_code(sector.get("cSecVal"))
+    industry_name = str(sector.get("lSecVal") or "").strip()
+
     return {
         "ins_code": str(ins_code),
-        "company_code": next(iter(company_codes)),
-        "industry_code": next(iter(industry_codes)),
-        "industry_name": next(iter(industry_names), ""),
+        "company_code": company_code,
+        "industry_code": industry_code,
+        "industry_name": industry_name,
         "raw_json": json.dumps(payload, ensure_ascii=False),
     }
 
@@ -102,6 +101,7 @@ def _load_and_cache_identities(batch_size=500, max_workers=12):
         db.execute("""CREATE TABLE IF NOT EXISTS tsetmc_identity_cache (
             ins_code TEXT PRIMARY KEY,
             company_code TEXT NOT NULL DEFAULT '',
+            company_key_source TEXT NOT NULL DEFAULT 'cComVal',
             industry_code TEXT NOT NULL DEFAULT '',
             industry_name TEXT NOT NULL DEFAULT '',
             raw_json TEXT NOT NULL DEFAULT '{}',
@@ -109,13 +109,16 @@ def _load_and_cache_identities(batch_size=500, max_workers=12):
             error TEXT NULL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
+        cache_columns = {row["name"] for row in db.execute("PRAGMA table_info(tsetmc_identity_cache)").fetchall()}
+        if "company_key_source" not in cache_columns:
+            db.execute("ALTER TABLE tsetmc_identity_cache ADD COLUMN company_key_source TEXT NOT NULL DEFAULT 'cComVal'")
         pending = db.execute("""
             SELECT s.ins_code
             FROM market_symbols s
             LEFT JOIN tsetmc_identity_cache c ON c.ins_code=s.ins_code
             WHERE s.instrument_code_is_placeholder=0
               AND s.ins_code GLOB '[0-9]*'
-              AND (c.ins_code IS NULL OR c.status<>'SUCCESS')
+              AND (c.ins_code IS NULL OR c.status<>'SUCCESS' OR c.company_key_source<>'cSocCSAC')
             ORDER BY s.symbol_id
             LIMIT ?
         """, (batch_size,)).fetchall()
@@ -138,13 +141,13 @@ def _load_and_cache_identities(batch_size=500, max_workers=12):
         for identity, error in results:
             if error:
                 db.execute("""INSERT OR REPLACE INTO tsetmc_identity_cache
-                    (ins_code,company_code,industry_code,industry_name,raw_json,status,error,updated_at)
-                    VALUES(?, '', '', '', '{}', 'ERROR', ?, CURRENT_TIMESTAMP)""",
+                    (ins_code,company_code,company_key_source,industry_code,industry_name,raw_json,status,error,updated_at)
+                    VALUES(?, '', 'cSocCSAC', '', '', '{}', 'ERROR', ?, CURRENT_TIMESTAMP)""",
                     identity["ins_code"], error)
             else:
                 db.execute("""INSERT OR REPLACE INTO tsetmc_identity_cache
-                    (ins_code,company_code,industry_code,industry_name,raw_json,status,error,updated_at)
-                    VALUES(?,?,?,?,?,'SUCCESS',NULL,CURRENT_TIMESTAMP)""",
+                    (ins_code,company_code,company_key_source,industry_code,industry_name,raw_json,status,error,updated_at)
+                    VALUES(?,?,'cSocCSAC',?,?,?,'SUCCESS',NULL,CURRENT_TIMESTAMP)""",
                     identity["ins_code"], identity["company_code"], identity["industry_code"],
                     identity["industry_name"], identity["raw_json"])
         total = db.execute("""SELECT COUNT(*) FROM market_symbols
@@ -188,7 +191,7 @@ def sync_tsetmc_registry(batch_size=500, max_workers=12):
         """).fetchall()]
         identities = [dict(row) for row in db.execute("""
             SELECT ins_code,company_code,industry_code,industry_name
-            FROM tsetmc_identity_cache WHERE status='SUCCESS'
+            FROM tsetmc_identity_cache WHERE status='SUCCESS' AND company_key_source='cSocCSAC'
             ORDER BY company_code,ins_code
         """).fetchall()]
 
