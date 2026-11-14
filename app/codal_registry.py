@@ -61,33 +61,6 @@ def _publish_date(report, fallback):
     return datetime(*_jalali_to_gregorian(*map(int, match.groups())))
 
 
-_INDUSTRY_TERMS = {
-    "STEEL": ("فولاد", "آهناسفنجی", "گندله", "بیلت", "شمش", "قراضه", "کنسانترهآهن", "میلگرد", "تیرآهن", "ورقفولادی"),
-    "CEMENT": ("سیمان", "کلینکر"),
-    "BANK": ("بانک", "سپرده", "تسهیلات", "درآمدتسهیلات"),
-    "REFINERY": ("پالایشگاه", "پالایشی", "پالایش", "بنزین", "گازوئیل", "نفتکوره", "نفتخام"),
-    "PETROCHEMICAL": ("پتروشیمی", "پلیمر", "الفین", "آروماتیک", "متانول", "اوره", "آمونیاک", "اتیلن", "پروپیلن", "بنزن", "تولوئن"),
-}
-
-
-def infer_industry_code(company_name, symbol, item_names):
-    """Conservative classification: company name has stronger weight than report item names."""
-    company_text = _norm(f"{company_name or ''} {symbol or ''}")
-    item_text = " ".join(_norm(x) for x in (item_names or []))
-    scores = {}
-    for code, terms in _INDUSTRY_TERMS.items():
-        company_hits = sum(1 for term in terms if term in company_text)
-        item_hits = sum(1 for term in terms if term in item_text)
-        score = company_hits * 10 + item_hits
-        if score:
-            scores[code] = score
-    if not scores:
-        return None
-    best = max(scores.values())
-    winners = [code for code, score in scores.items() if score == best]
-    return winners[0] if len(winners) == 1 else None
-
-
 def ensure_company_and_document(cur, report, item_names=None):
     """Get/create company and Codal source document; caller owns transaction/commit."""
     symbol = str(report.get("Symbol") or "").strip()
@@ -98,25 +71,20 @@ def ensure_company_and_document(cur, report, item_names=None):
     if len(symbol) > 40:
         raise ValueError("طول نماد شرکت از ظرفیت Companies.Symbol بیشتر است.")
 
-    cur.execute("SELECT CompanyID FROM dbo.Companies WITH (UPDLOCK, HOLDLOCK) WHERE Symbol=?", symbol)
-    company = cur.fetchone()
-    if company:
-        company_id = int(company[0])
-    else:
-        if not company_name:
-            raise ValueError(f"شرکت {symbol} در Companies وجود ندارد و نام کامل شرکت از اطلاعات کدال دریافت نشده است.")
-        industry_code = infer_industry_code(company_name, symbol, item_names or [])
-        if not industry_code:
-            raise ValueError(
-                f"شرکت «{company_name}» ({symbol}) در Companies وجود ندارد و صنعت آن از اطلاعات گزارش به‌صورت مطمئن قابل تشخیص نیست؛ ایجاد شرکت متوقف شد."
-            )
-        cur.execute("SELECT IndustryID FROM dbo.Industries WHERE IndustryCode=? AND IsActive=1", industry_code)
-        industry = cur.fetchone()
-        if not industry:
-            raise ValueError(f"صنعت {industry_code} در dbo.Industries فعال نیست؛ ایجاد شرکت متوقف شد.")
-        cur.execute("""INSERT INTO dbo.Companies(Symbol,CompanyName,IndustryID,IsActive)
-                       OUTPUT INSERTED.CompanyID VALUES(?,?,?,1)""", symbol, company_name, int(industry[0]))
-        company_id = int(cur.fetchone()[0])
+    # Resolve the report symbol only through an exact, official TSETMC symbol row
+    # already linked to a Companies record. Never infer a company or industry from text.
+    cur.execute("""SELECT DISTINCT c.CompanyID
+                   FROM dbo.MarketSymbols ms
+                   INNER JOIN dbo.Companies c ON c.CompanyID=ms.CompanyID
+                   WHERE ms.Symbol=? AND ms.InstrumentCodeIsPlaceholder=0
+                     AND ms.CompanyID IS NOT NULL""", symbol)
+    linked_companies = cur.fetchall()
+    if len(linked_companies) != 1:
+        raise ValueError(
+            f"نماد «{symbol}» باید دقیقاً به یک شرکت از طریق شناسه رسمی TSETMC در dbo.MarketSymbols متصل باشد؛ "
+            f"تعداد اتصال معتبر: {len(linked_companies)}. ابتدا همگام‌سازی صنایع، شرکت‌ها و نمادها را اجرا کنید."
+        )
+    company_id = int(linked_companies[0][0])
 
     cur.execute("SELECT SourceID FROM dbo.DataSources WHERE SourceCode='CODAL' AND IsActive=1")
     sources = cur.fetchall()
