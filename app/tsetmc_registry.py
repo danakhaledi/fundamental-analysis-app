@@ -137,26 +137,43 @@ def _load_and_cache_identities(batch_size=500, max_workers=12):
             for future in as_completed(futures):
                 results.append(future.result())
 
+
+
     with sqlite_connect() as db:
         for identity, error in results:
             if error:
                 db.execute("""INSERT OR REPLACE INTO tsetmc_identity_cache
                     (ins_code,company_code,company_key_source,industry_code,industry_name,raw_json,status,error,updated_at)
                     VALUES(?, '', 'cSocCSAC', '', '', '{}', 'ERROR', ?, CURRENT_TIMESTAMP)""",
-                    identity["ins_code"], error)
+                    (identity["ins_code"], error))
             else:
                 db.execute("""INSERT OR REPLACE INTO tsetmc_identity_cache
                     (ins_code,company_code,company_key_source,industry_code,industry_name,raw_json,status,error,updated_at)
                     VALUES(?,?,'cSocCSAC',?,?,?,'SUCCESS',NULL,CURRENT_TIMESTAMP)""",
-                    identity["ins_code"], identity["company_code"], identity["industry_code"],
-                    identity["industry_name"], identity["raw_json"])
+                    (
+                        identity["ins_code"],
+                        identity["company_code"],
+                        identity["industry_code"],
+                        identity["industry_name"],
+                        identity["raw_json"]
+                    ))
+
         total = db.execute("""SELECT COUNT(*) FROM market_symbols
             WHERE instrument_code_is_placeholder=0 AND ins_code GLOB '[0-9]*'""").fetchone()[0]
-        successful = db.execute("SELECT COUNT(*) FROM tsetmc_identity_cache WHERE status='SUCCESS' AND company_key_source='cSocCSAC'").fetchone()[0]
+successful = db.execute("""
+    SELECT COUNT(*)
+    FROM market_symbols s
+    INNER JOIN tsetmc_identity_cache c ON c.ins_code = s.ins_code
+    WHERE s.instrument_code_is_placeholder = 0
+      AND s.ins_code GLOB '[0-9]*'
+      AND c.status = 'SUCCESS'
+      AND c.company_key_source = 'cSocCSAC'
+ """).fetchone()[0]
         remaining = db.execute("""SELECT COUNT(*) FROM market_symbols s
             LEFT JOIN tsetmc_identity_cache c ON c.ins_code=s.ins_code
             WHERE s.instrument_code_is_placeholder=0 AND s.ins_code GLOB '[0-9]*'
               AND (c.ins_code IS NULL OR c.status<>'SUCCESS' OR c.company_key_source<>'cSocCSAC')""").fetchone()[0]
+
     return {
         "attempted": len(pending),
         "successfully_resolved": len(results) - sum(1 for _, error in results if error),
@@ -165,6 +182,7 @@ def _load_and_cache_identities(batch_size=500, max_workers=12):
         "remaining_identities": int(remaining),
         "errors": [error for _, error in results if error][:10],
     }
+
 
 
 def sync_tsetmc_registry(batch_size=500, max_workers=12):
