@@ -44,13 +44,11 @@ def main():
         return 2
 
     try:
-        from app.market_symbols import fetch_all_symbols, resolve_official_symbols_batch
+        from app.market_symbols import fetch_all_symbols
         from app.authdb import upsert_market_symbols, market_symbol_count, connect as sqlite_connect
         from app.sqlserver import transfer_official_market_symbols
         from app.historical_prices import history_status, sync_history_batch
 
-        resolution_batch = env_int("DAILY_SYMBOL_RESOLUTION_BATCH", 500, 1, 800)
-        max_resolution_rounds = env_int("DAILY_SYMBOL_RESOLUTION_ROUNDS", 20, 1, 100)
         max_backfill_passes = env_int("DAILY_BACKFILL_PASSES", 3, 1, 10)
         max_errors_per_phase = env_int("DAILY_MAX_ERROR_RETRIES", 3, 1, 10)
         log("START: daily market synchronization")
@@ -61,17 +59,6 @@ def main():
             raise RuntimeError("TSETMC returned an empty symbol list; refusing to treat this as a successful sync.")
         saved = upsert_market_symbols(symbols)
         log(f"SYMBOLS: fetched={len(symbols)}, upserted={saved}, local_total={market_symbol_count()}")
-
-        # Resolve placeholders in bounded batches until exhausted or no progress is made.
-        for round_no in range(1, max_resolution_rounds + 1):
-            result = resolve_official_symbols_batch(batch_size=resolution_batch, max_workers=8)
-            log(f"SYMBOL_RESOLUTION round={round_no}: {json.dumps(result, ensure_ascii=False, default=str)}")
-            if result.get("attempted", 0) == 0 or result.get("matched", 0) == 0:
-                if result.get("remaining_placeholders", 0):
-                    log("WARNING: unresolved temporary symbol IDs remain; no progress in this round. See resolution log above.")
-                break
-        else:
-            log("WARNING: symbol-ID resolution reached configured round limit; unresolved symbols may remain.")
 
         try:
             transfer = transfer_official_market_symbols()
