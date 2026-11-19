@@ -188,7 +188,6 @@ def symbols_registry_sync(request: Request):
             "industry_unknown": int(summary.get("industry_unknown") or 0),
             "review": int(summary.get("review") or 0),
             "symbol_link_conflict": int(summary.get("symbol_link_conflict") or 0),
-            "fetch_errors": len(preview.get("fetch", {}).get("errors") or []),
         }
         blockers = {key: value for key, value in blockers.items() if value}
         if blockers:
