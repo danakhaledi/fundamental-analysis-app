@@ -13,8 +13,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 # The last verified full-market snapshot contained more than 3,200 instruments.
 # A first-time sync must therefore be substantially larger than a small,
 # syntactically valid but truncated API response.
-MIN_EXPECTED_MARKET_ROWS = 1000
-MIN_PREVIOUS_SNAPSHOT_RATIO = 0.75
+MIN_EXPECTED_MARKET_ROWS = 2500
+MIN_PREVIOUS_SNAPSHOT_RATIO = 0.80
 
 
 def _request_bytes(url, timeout=45):
