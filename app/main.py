@@ -14,7 +14,7 @@ from .dotenv import load_env
 load_env()
 from .authdb import initialize, get_user, set_password, list_users, create_user, update_user_policy, set_user_active, force_password_reset, record_login, upsert_market_symbols, list_market_symbols, market_symbol_count, get_market_symbol
 from .security import verify_password
-from .sqlserver import status, read_view, VIEWS, market_migration_counts, transfer_market_data, transfer_official_market_symbols
+from .sqlserver import status, read_view, VIEWS, market_migration_counts, transfer_market_data, transfer_official_market_symbols, official_market_symbol_transfer_status
 from .appconfig import save_connection_string, get_connection_string, has_saved_connection
 from .codal_center import search_codal_reports, search_codal_for_symbols, download_excel_reports, extract_downloaded_reports
 from .codal_resource_stage import stage_resource_reports
@@ -173,6 +173,16 @@ def symbols_registry_sync(request: Request):
     if user["role"] != "ADMIN":
         return RedirectResponse("/symbols?error=admin", status_code=303)
     try:
+        transfer_status = official_market_symbol_transfer_status()
+        if not transfer_status["local_count"]:
+            raise RuntimeError("فهرست محلی نمادها خالی است؛ ابتدا فهرست را از TSETMC تازه‌سازی کنید.")
+        if transfer_status["missing_count"]:
+            examples = "، ".join(transfer_status["missing_examples"])
+            raise RuntimeError(
+                f"{transfer_status['missing_count']} نماد رسمی هنوز در dbo.MarketSymbols نیست. "
+                "ابتدا عملیات «انتقال نمادهای رسمی به SQL Server» را جداگانه اجرا کنید. "
+                f"نمونه InsCodeها: {examples}"
+            )
         # Resolve every official instrument identity and validate the complete
         # company/industry mapping before the first SQL Server write.
         preview = preview_tsetmc_registry(batch_size=1000, max_workers=12)
@@ -197,8 +207,6 @@ def symbols_registry_sync(request: Request):
                 + detail
             )
 
-        # Transfer only after the read-only preflight confirms complete identities.
-        market_transfer = transfer_official_market_symbols()
         totals = {
             "attempted": 0, "successfully_resolved": 0, "remaining_identities": 0,
             "industries_from_tsetmc": 0, "parent_industries_from_tsetmc": 0,
@@ -247,10 +255,6 @@ def symbols_registry_sync(request: Request):
                 "همگام‌سازی رجیستری به علت خطای اعتبارسنجی متوقف شد: "
                 + " | ".join(totals["errors"][:5])
             )
-        notice += (
-            f" انتقال نمادها به SQL Server: {market_transfer['inserted_symbols']} درج، "
-            f"{market_transfer.get('updated_symbols', 0)} به‌روزرسانی."
-        )
         return RedirectResponse("/symbols?notice=" + quote(notice[:1500]), status_code=303)
     except Exception as exc:
         return RedirectResponse("/symbols?error=" + quote(
@@ -389,8 +393,14 @@ def symbols_history_sync(request: Request, mode: str = Form("backfill"),
             if missing:
                 raise ValueError("این نمادها در فهرست فعال SQLite پیدا نشدند: " + "، ".join(missing[:20]))
             selected_codes = sorted({code for token in tokens for code in by_symbol[token]})
-        # Ensure destination symbol identities exist before inserting daily history.
-        transfer_official_market_symbols()
+        transfer_status = official_market_symbol_transfer_status(selected_codes)
+        if transfer_status["missing_count"]:
+            examples = "، ".join(transfer_status["missing_examples"])
+            raise RuntimeError(
+                f"{transfer_status['missing_count']} نماد انتخابی هنوز در dbo.MarketSymbols نیست. "
+                "ابتدا از صفحه مدیریت نمادها عملیات انتقال نمادهای رسمی به SQL Server را اجرا کنید. "
+                f"نمونه InsCodeها: {examples}"
+            )
         result = sync_history_batch(mode, ins_codes=selected_codes)
         if selected_codes:
             result["selected_symbols"] = len(selected_codes)
@@ -405,36 +415,51 @@ def symbols_history_sync(request: Request, mode: str = Form("backfill"),
         return page(request, "market_history.html", stats=stats, result=None,
                     error=f"دریافت/ثبت تاریخچه کامل نشد: {type(exc).__name__}: {str(exc)[:260]}")
 
-@app.post("/symbols/sync", response_class=HTMLResponse)
-def symbols_sync(request: Request):
+@app.post("/symbols/refresh", response_class=HTMLResponse)
+@app.post("/symbols/sync", response_class=HTMLResponse, include_in_schema=False)
+def symbols_refresh(request: Request):
+    """Refresh the local SQLite symbol master only; never writes to SQL Server."""
     user, redir = protect(request)
     if redir: return redir
     if user["role"] != "ADMIN":
         return RedirectResponse("/symbols?error=admin", status_code=303)
     try:
         rows = fetch_all_symbols()
-        count = upsert_market_symbols(rows)
-        sql_message = ""
-        try:
-            sql_result = transfer_official_market_symbols()
-            sql_message = (
-                f" انتقال SQL Server: {sql_result['inserted_symbols']} نماد جدید، "
-                f"{sql_result.get('updated_symbols', 0)} نماد به‌روزرسانی‌شده، "
-                f"{sql_result['skipped_symbols']} مورد متعارض/از قبل موجود."
-            )
-        except Exception as sql_exc:
-            sql_message = f" انتقال به SQL Server انجام نشد: {type(sql_exc).__name__}: {str(sql_exc)[:140]}"
+        processed = upsert_market_symbols(rows)
         details = (
-            f"فهرست نمادها مستقیماً از APIهای TSETMC دریافت و همگام شد: "
-            f"{count} ابزار دارای InsCode رسمی و یکتا.{sql_message}"
+            f"فهرست رسمی TSETMC در SQLite محلی به‌روزرسانی شد؛ "
+            f"دریافت‌شده: {len(rows)}، پردازش‌شده (درج/به‌روزرسانی): {processed}، "
+            f"کل نمادهای فعال محلی: {market_symbol_count()}. "
+            "در این عملیات هیچ تغییری در SQL Server انجام نشد."
         )
-        details += " گزارش‌های کدال فقط از نمادهای رسمی موجود در MarketSymbols استفاده می‌کنند و امکان ایجاد نماد یا شناسه جدید از فایل گزارش را ندارند."
-        details += " رجیستری شرکت‌ها و صنایع هنوز تغییری نکرده است؛ برای بررسی پیشنهادها از گزینه «پیش‌نمایش رجیستری رسمی» استفاده کنید."
-        return page(request, "symbols.html", count=market_symbol_count(), notice=details, error=None,
-                    is_admin=True)
+        return RedirectResponse("/symbols?notice=" + quote(details[:1400]), status_code=303)
     except Exception as exc:
-        return page(request, "symbols.html", count=market_symbol_count(), notice="",
-                    error=f"همگام‌سازی انجام نشد: {type(exc).__name__}: {str(exc)[:240]}", is_admin=True)
+        return RedirectResponse("/symbols?error=" + quote(
+            f"به‌روزرسانی محلی نمادها انجام نشد: {type(exc).__name__}: {str(exc)[:240]}"),
+            status_code=303)
+
+
+@app.post("/symbols/sql-transfer", response_class=HTMLResponse)
+def symbols_sql_transfer(request: Request):
+    """Explicitly transfer the local official symbol master to SQL Server."""
+    user, redir = protect(request)
+    if redir: return redir
+    if user["role"] != "ADMIN":
+        return RedirectResponse("/symbols?error=admin", status_code=303)
+    try:
+        result = transfer_official_market_symbols()
+        details = (
+            f"انتقال نمادهای رسمی به SQL Server انجام شد؛ "
+            f"نمادهای بررسی‌شده: {result['official_symbols_found']}، "
+            f"درج جدید: {result['inserted_symbols']}، "
+            f"به‌روزرسانی: {result['updated_symbols']}، "
+            f"رکوردهای legacy غیرفعال‌شده: {result['legacy_placeholders_archived']}."
+        )
+        return RedirectResponse("/symbols?notice=" + quote(details[:1400]), status_code=303)
+    except Exception as exc:
+        return RedirectResponse("/symbols?error=" + quote(
+            f"انتقال نمادها به SQL Server انجام نشد: {type(exc).__name__}: {str(exc)[:260]}"),
+            status_code=303)
 
 def _codal_data_dir():
     return ROOT.parent / "data" / "codal_downloads"
