@@ -45,12 +45,11 @@ def main():
 
     try:
         from app.market_symbols import fetch_all_symbols
-        from app.authdb import upsert_market_symbols, market_symbol_count, connect as sqlite_connect
+        from app.authdb import upsert_market_symbols, market_symbol_count
         from app.sqlserver import transfer_official_market_symbols
         from app.historical_prices import history_status, sync_history_batch
 
         max_backfill_passes = env_int("DAILY_BACKFILL_PASSES", 3, 1, 10)
-        max_errors_per_phase = env_int("DAILY_MAX_ERROR_RETRIES", 3, 1, 10)
         log("START: daily market synchronization")
 
         # Refresh the symbol list; fail the run rather than silently proceeding on empty data.
