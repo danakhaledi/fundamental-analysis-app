@@ -21,7 +21,7 @@ from .codal_resource_stage import stage_resource_reports
 from .codal_products_stage import stage_product_reports
 from .codal_sales_stage import stage_sales_reports
 from .codal_state import initialize as initialize_codal_state, upsert_search_results, list_reports as list_codal_state_reports, get_reports as get_codal_state_reports, update_report as update_codal_state_report, summary as codal_state_summary, migrate_legacy_files as migrate_legacy_codal_files
-from .market_symbols import fetch_all_symbols, resolve_official_symbols_batch
+from .market_symbols import fetch_all_symbols
 from .tsetmc_registry import preview_tsetmc_registry
 from .historical_prices import history_status, sync_history_batch
 from .market_job_ui import read_log, task_status, configure_task, run_now, delete_task, LOG_FILE
@@ -179,7 +179,7 @@ def market_auto_job_page(request: Request, notice: str = "", error: str = ""):
         return default
     return page(request, "market_auto_job.html", task=task_status(), logs=logs, notice=notice, error=error,
         stage_symbols=latest_stage(("SYMBOLS:", "START: daily"), "هنوز اجرا نشده"),
-        stage_resolution=latest_stage(("SYMBOL_RESOLUTION", "SQL_SYMBOL_TRANSFER"), "در انتظار اجرا"),
+        stage_resolution=latest_stage(("SQL_SYMBOL_TRANSFER",), "در انتظار انتقال نمادهای رسمی"),
         stage_backfill=latest_stage(("BACKFILL_PASS_START", "BACKFILL pass=", "backfill did not"), "در انتظار اجرا"),
         stage_update=latest_stage(("PRICE_UPDATE:", "price update cycle"), "در انتظار اجرا"),
         stage_final=latest_stage(("FINAL_STATUS:", "END: daily", "FATAL:"), "در انتظار پایان مراحل قبلی"))
@@ -194,13 +194,12 @@ def market_auto_job_log_download(request: Request):
     return FileResponse(str(LOG_FILE), filename="market_daily_sync.log", media_type="text/plain; charset=utf-8")
 
 @app.post("/symbols/auto-job/configure")
-def market_auto_job_configure(request: Request, hour: int = Form(7), minute: int = Form(0),
-                              resolution_batch: int = Form(500)):
+def market_auto_job_configure(request: Request, hour: int = Form(7), minute: int = Form(0)):
     user, redir = protect(request)
     if redir: return redir
     if user["role"] != "ADMIN": return RedirectResponse("/symbols?error=admin", status_code=303)
     try:
-        message = configure_task(hour, minute, resolution_batch)
+        message = configure_task(hour, minute)
         return RedirectResponse("/symbols/auto-job?notice=" + quote(message[:200]), status_code=303)
     except Exception as exc:
         return RedirectResponse("/symbols/auto-job?error=" + quote(f"تنظیم جاب انجام نشد: {type(exc).__name__}: {str(exc)[:250]}"), status_code=303)
@@ -298,20 +297,21 @@ def symbols_sync(request: Request):
     try:
         rows = fetch_all_symbols()
         count = upsert_market_symbols(rows)
-        # Official ID resolution is part of the normal symbol sync, not a separate action.
-        resolution = resolve_official_symbols_batch(batch_size=500, max_workers=16)
         sql_message = ""
         try:
             sql_result = transfer_official_market_symbols()
-            sql_message = f" انتقال SQL Server: {sql_result['inserted_symbols']} جدید، {sql_result.get('updated_symbols', 0)} رکورد قبلی با کد رسمی به‌روزرسانی شد، {sql_result['skipped_symbols']} متعارض/از قبل موجود."
+            sql_message = (
+                f" انتقال SQL Server: {sql_result['inserted_symbols']} نماد جدید، "
+                f"{sql_result.get('updated_symbols', 0)} نماد به‌روزرسانی‌شده، "
+                f"{sql_result['skipped_symbols']} مورد متعارض/از قبل موجود."
+            )
         except Exception as sql_exc:
             sql_message = f" انتقال به SQL Server انجام نشد: {type(sql_exc).__name__}: {str(sql_exc)[:140]}"
-        details = (f"فهرست بازار همگام شد: {count} رکورد؛ جست‌وجوی شناسه رسمی در این نوبت: "
-                   f"{resolution['attempted']} نماد، تطبیق موفق: {resolution['matched']}، "
-                   f"نمادهای دارای کد موقت باقی‌مانده: {resolution['remaining_placeholders']}، "
-                   f"نمادهای هنوز بررسی‌نشده: {resolution['unattempted_remaining']}؛ هم‌زمانی درخواست‌ها: {resolution.get('workers', 1)}.{sql_message}")
-        if resolution.get("errors"):
-            details += " خطاهای نمونه جست‌وجو: " + "؛ ".join(resolution["errors"])
+        details = (
+            f"فهرست نمادها مستقیماً از APIهای TSETMC دریافت و همگام شد: "
+            f"{count} ابزار دارای InsCode رسمی و یکتا.{sql_message}"
+        )
+        details += " گزارش‌های کدال فقط از نمادهای رسمی موجود در MarketSymbols استفاده می‌کنند و امکان ایجاد نماد یا شناسه جدید از فایل گزارش را ندارند."
         details += " رجیستری شرکت‌ها و صنایع هنوز تغییری نکرده است؛ برای بررسی پیشنهادها از گزینه «پیش‌نمایش رجیستری رسمی» استفاده کنید."
         return page(request, "symbols.html", count=market_symbol_count(), notice=details, error=None,
                     is_admin=True)
