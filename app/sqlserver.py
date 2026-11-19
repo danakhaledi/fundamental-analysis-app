@@ -209,6 +209,9 @@ def transfer_official_market_symbols():
                 )
 
                 if code_match:
+                    if local_match and int(local_match[0]) != int(code_match[0]):
+                        skipped += 1
+                        continue
                     code_id = int(code_match[0])
                     current_local_id = code_match[3]
                     if current_local_id not in (None, row["symbol_id"]):
