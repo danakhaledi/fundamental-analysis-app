@@ -3,6 +3,7 @@
 Codal workbooks are consumers of this registry; they must never create symbol
 identities. This module only fetches official TSETMC InsCode records.
 """
+import gzip
 import json
 import urllib.request
 
@@ -27,9 +28,16 @@ def _request_bytes(url, timeout=45):
         return response.read()
 
 
+def _decode_body(raw):
+    """Decode an HTTP body, transparently handling GZIP-compressed responses."""
+    if raw[:2] == bytes((31, 139)):
+        raw = gzip.decompress(raw)
+    return raw
+
+
 def _request_json(url, timeout=45):
-    raw = _request_bytes(url, timeout).decode("utf-8-sig", errors="replace")
-    return json.loads(raw)
+    raw = _decode_body(_request_bytes(url, timeout))
+    return json.loads(raw.decode("utf-8-sig", errors="replace"))
 
 
 def _first(obj, *keys):
@@ -86,9 +94,13 @@ def _normalize_api(payload):
         merged.update(instrument)
 
         code = str(_first(merged, "insCode", "instrumentCode", "InsCode")).strip()
-        symbol = str(_first(merged, "lVal18AFC", "symbol", "shortName", "Symbol")).strip()
-        name = str(_first(merged, "lVal30", "companyName", "longName", "CompanyName")).strip()
-        isin = str(_first(merged, "cIsin", "isin", "ISIN")).strip()
+        symbol = str(_first(
+            merged, "lVal18AFC", "lva", "symbol", "shortName", "Symbol"
+        )).strip()
+        name = str(_first(
+            merged, "lVal30", "lvc", "companyName", "longName", "CompanyName"
+        )).strip()
+        isin = str(_first(merged, "cIsin", "insID", "isin", "ISIN")).strip()
         if not code.isdigit() or code == "0" or not symbol:
             continue
 
@@ -115,8 +127,10 @@ def _fetch_legacy_market_watch():
     raw = None
     for url in urls:
         try:
-            candidate = _request_bytes(url, timeout=60).decode("utf-8-sig", errors="replace")
-            if "@" in candidate and len(candidate) > 1000:
+            body = _decode_body(_request_bytes(url, timeout=60))
+            candidate = body.decode("utf-8-sig", errors="replace")
+            sections = candidate.split("@")
+            if len(sections) >= 3 and len(sections[2]) > 1000:
                 raw = candidate
                 break
             errors.append(f"{url}: پاسخ خالی یا نامعتبر")
@@ -127,7 +141,9 @@ def _fetch_legacy_market_watch():
         raise RuntimeError("دریافت API قدیمی TSETMC ناموفق بود: " + "؛ ".join(errors))
 
     sections = raw.split("@")
-    candidates = sections[2].split(";") if len(sections) > 2 else []
+    if len(sections) < 3:
+        raise RuntimeError("ساختار پاسخ API قدیمی TSETMC معتبر نیست.")
+    candidates = sections[2].split(";")
     normalized = {}
     for line in candidates:
         cols = line.strip().split(",")
@@ -137,7 +153,7 @@ def _fetch_legacy_market_watch():
             cols[0].strip(), cols[1].strip(), cols[2].strip(), cols[3].strip()
         )
         flow = cols[17].strip()
-        if not code.isdigit() or not symbol:
+        if not code.isdigit() or code == "0" or not symbol:
             continue
         normalized[code] = {
             "ins_code": code,
