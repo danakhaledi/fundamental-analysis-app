@@ -44,7 +44,7 @@ def market_migration_counts():
     from .authdb import connect as sqlite_connect
     local = {}
     with sqlite_connect() as db:
-        local["symbols"] = db.execute("SELECT COUNT(*) FROM market_symbols").fetchone()[0]
+        local["symbols"] = db.execute("SELECT COUNT(*) FROM market_symbols WHERE instrument_code_is_placeholder=0 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'").fetchone()[0]
         local["daily"] = db.execute("SELECT COUNT(*) FROM market_daily_data").fetchone()[0]
     cs = get_connection_string()
     if not cs:
@@ -74,8 +74,8 @@ def transfer_market_data():
         raise RuntimeError("اتصال SQL Server تنظیم نشده است.")
     import pyodbc
     with sqlite_connect() as db:
-        symbols = [dict(r) for r in db.execute("SELECT * FROM market_symbols ORDER BY symbol_id").fetchall()]
-        daily = [dict(r) for r in db.execute("SELECT * FROM market_daily_data ORDER BY market_data_id").fetchall()]
+        symbols = [dict(r) for r in db.execute("SELECT * FROM market_symbols WHERE instrument_code_is_placeholder=0 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' ORDER BY symbol_id").fetchall()]
+        daily = [dict(r) for r in db.execute("SELECT * FROM market_daily_data WHERE ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' ORDER BY market_data_id").fetchall()]
     inserted_symbols = inserted_daily = skipped_symbols = skipped_daily = 0
     with pyodbc.connect(cs, timeout=10) as conn:
         cur = conn.cursor()
@@ -140,7 +140,11 @@ def _sql_datetime(value):
 
 
 def transfer_official_market_symbols():
-    """Sync locally verified numeric TSETMC codes to SQL Server, upgrading placeholder rows in place."""
+    """Sync official numeric TSETMC InsCode records to SQL Server.
+
+    The legacy destination placeholder flag is written as false for compatibility;
+    no new placeholder identities are created or resolved.
+    """
     from .authdb import connect as sqlite_connect
     cs = get_connection_string()
     if not cs:
@@ -148,7 +152,7 @@ def transfer_official_market_symbols():
     import pyodbc
     with sqlite_connect() as db:
         rows = [dict(r) for r in db.execute(
-            "SELECT * FROM market_symbols WHERE instrument_code_is_placeholder=0 ORDER BY symbol_id"
+            "SELECT * FROM market_symbols WHERE instrument_code_is_placeholder=0 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' ORDER BY symbol_id"
         ).fetchall()]
     rows = [r for r in rows if str(r.get("ins_code", "")).isdigit()]
     inserted = updated = skipped = 0
