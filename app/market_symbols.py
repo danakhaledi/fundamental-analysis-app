@@ -89,7 +89,7 @@ def _normalize_api(payload):
         symbol = str(_first(merged, "lVal18AFC", "symbol", "shortName", "Symbol")).strip()
         name = str(_first(merged, "lVal30", "companyName", "longName", "CompanyName")).strip()
         isin = str(_first(merged, "cIsin", "isin", "ISIN")).strip()
-        if not code.isdigit() or not symbol:
+        if not code.isdigit() or code == "0" or not symbol:
             continue
 
         normalized[code] = {
@@ -179,7 +179,7 @@ def _validate_full_snapshot(rows, previous_count=0):
     if not rows:
         raise RuntimeError("فهرست نمادهای TSETMC خالی است.")
     codes = [str(row.get("ins_code") or "") for row in rows]
-    if any(not code.isdigit() for code in codes):
+    if any(not code.isdigit() or code == "0" for code in codes):
         raise RuntimeError("پاسخ TSETMC شامل شناسه غیررسمی یا غیرعددی است.")
     if len(codes) != len(set(codes)):
         raise RuntimeError("پاسخ TSETMC پس از نرمال‌سازی هنوز شناسه تکراری دارد.")
