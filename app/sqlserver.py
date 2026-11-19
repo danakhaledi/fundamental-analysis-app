@@ -252,6 +252,12 @@ def transfer_official_market_symbols():
                 )
                 inserted += 1
 
+            if skipped or inserted + updated != len(rows):
+                raise RuntimeError(
+                    "Official TSETMC symbol transfer was incomplete; SQL Server transaction rolled back. "
+                    f"found={len(rows)}, inserted={inserted}, updated={updated}, skipped={skipped}"
+                )
+
             # Any legacy placeholders not matched in this run are also hidden from
             # active market consumers, while retaining their rows and history.
             cur.execute(
