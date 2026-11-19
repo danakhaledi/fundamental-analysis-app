@@ -201,16 +201,20 @@ def symbols_registry_sync(request: Request):
             if previous_remaining is not None and remaining >= previous_remaining:
                 break
             previous_remaining = remaining
-        notice = (
-            f"رجیستری رسمی پردازش شد؛ صنایع: {totals['industries_from_tsetmc']} "
-            f"(سرگروه: {totals['parent_industries_from_tsetmc']}، زیرگروه: {totals['subindustries_from_tsetmc']})، "
-            f"شرکت جدید: {totals['companies_inserted']}، شرکت موجود: {totals['companies_existing']}، "
-            f"بازطبقه‌بندی‌شده: {totals['companies_reclassified']}، "
-            f"نماد متصل‌شده: {totals['symbols_linked']}، هویت باقی‌مانده: {totals['remaining_identities']}، "
-            f"تعارض‌ها: {totals['industry_conflicts'] + totals['company_link_conflicts'] + totals['representative_symbol_conflicts']}."
-        )
         if totals["remaining_identities"]:
-            notice += " بخشی از هویت‌ها دریافت نشد؛ عملیات را پس از بررسی خطاها دوباره اجرا کنید."
+            notice = (
+                f"دریافت هویت‌های TSETMC کامل نشد؛ {totals['remaining_identities']} هویت باقی مانده است. "
+                "برای جلوگیری از ثبت طبقه‌بندی ناقص، همگام‌سازی صنایع و شرکت‌ها در SQL Server انجام نشد."
+            )
+        else:
+            notice = (
+                f"رجیستری رسمی پردازش شد؛ صنایع: {totals['industries_from_tsetmc']} "
+                f"(سرگروه: {totals['parent_industries_from_tsetmc']}، زیرگروه: {totals['subindustries_from_tsetmc']})، "
+                f"شرکت جدید: {totals['companies_inserted']}، شرکت موجود: {totals['companies_existing']}، "
+                f"بازطبقه‌بندی‌شده: {totals['companies_reclassified']}، "
+                f"نماد متصل‌شده: {totals['symbols_linked']}، "
+                f"تعارض‌ها: {totals['industry_conflicts'] + totals['company_link_conflicts'] + totals['representative_symbol_conflicts']}."
+            )
         if totals["errors"]:
             notice += " خطاهای نمونه: " + " | ".join(totals["errors"][:3])
         notice += (
