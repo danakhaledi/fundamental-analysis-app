@@ -179,9 +179,9 @@ def symbols_registry_sync(request: Request):
         summary = preview["summary"]
         blockers = {
             "identities_remaining": int(summary.get("identities_remaining") or 0),
-            "identity_count_mismatch": max(
-                0, int(summary.get("official_symbols") or 0) -
-                   int(summary.get("identities_resolved") or 0)
+            "identity_count_mismatch": int(
+                int(summary.get("official_symbols") or 0) !=
+                int(summary.get("identities_resolved") or 0)
             ),
             "industry_conflict": int(summary.get("industry_conflict") or 0),
             "industry_missing": int(summary.get("industry_missing") or 0),
