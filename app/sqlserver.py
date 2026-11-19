@@ -171,7 +171,8 @@ def official_market_symbol_transfer_status(ins_codes=None):
             raise RuntimeError("جدول dbo.MarketSymbols وجود ندارد.")
         cur.execute(
             """SELECT InsCode FROM dbo.MarketSymbols
-               WHERE TRY_CONVERT(BIGINT, LTRIM(RTRIM(InsCode))) IS NOT NULL"""
+               WHERE IsActive=1
+                 AND TRY_CONVERT(BIGINT, LTRIM(RTRIM(InsCode))) IS NOT NULL"""
         )
         destination_codes = {
             str(row[0]).strip() for row in cur.fetchall()
@@ -206,6 +207,11 @@ def transfer_official_market_symbols():
                WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'
                ORDER BY symbol_id"""
         ).fetchall()]
+
+    if not rows:
+        raise RuntimeError(
+            "فهرست محلی نمادهای رسمی خالی است؛ برای جلوگیری از هرگونه تغییر ناخواسته در SQL Server، انتقال انجام نشد."
+        )
 
     inserted = updated = skipped = archived_legacy = 0
     with pyodbc.connect(cs, timeout=15) as conn:
