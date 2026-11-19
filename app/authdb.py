@@ -197,7 +197,8 @@ def upsert_market_symbols(rows):
         for r in rows:
             symbol = str(r.get("symbol") or "").strip()
             incoming_code = str(r.get("ins_code") or "").strip()
-            if not incoming_code.isdigit() or not symbol:
+            # Only rows explicitly tagged by the TSETMC API fetcher may enter the master.
+            if r.get("source") != "TSETMC" or not incoming_code.isdigit() or not symbol:
                 continue
 
             company_name = str(r.get("company_name") or "").strip()
