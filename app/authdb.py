@@ -236,15 +236,15 @@ def list_market_symbols(search="", limit=5000):
         q = (search or "").strip()
         if q:
             like = f"%{q}%"
-            return c.execute("SELECT symbol_id,ins_code,symbol,company_name,market_board,isin FROM market_symbols WHERE is_active=1 AND instrument_code_is_placeholder=0 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' AND (symbol LIKE ? OR company_name LIKE ?) ORDER BY symbol COLLATE NOCASE LIMIT ?", (like,like,int(limit))).fetchall()
-        return c.execute("SELECT symbol_id,ins_code,symbol,company_name,market_board,isin FROM market_symbols WHERE is_active=1 AND instrument_code_is_placeholder=0 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' ORDER BY symbol COLLATE NOCASE LIMIT ?", (int(limit),)).fetchall()
+            return c.execute("SELECT symbol_id,ins_code,symbol,company_name,market_board,isin FROM market_symbols WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' AND (symbol LIKE ? OR company_name LIKE ?) ORDER BY symbol COLLATE NOCASE LIMIT ?", (like,like,int(limit))).fetchall()
+        return c.execute("SELECT symbol_id,ins_code,symbol,company_name,market_board,isin FROM market_symbols WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' ORDER BY symbol COLLATE NOCASE LIMIT ?", (int(limit),)).fetchall()
 
 
 def market_symbol_count():
     with connect() as c:
-        return c.execute("SELECT COUNT(*) FROM market_symbols WHERE is_active=1 AND instrument_code_is_placeholder=0 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'").fetchone()[0]
+        return c.execute("SELECT COUNT(*) FROM market_symbols WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'").fetchone()[0]
 
 
 def get_market_symbol(symbol_id):
     with connect() as c:
-        return c.execute("SELECT * FROM market_symbols WHERE symbol_id=? AND is_active=1 AND instrument_code_is_placeholder=0 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'", (int(symbol_id),)).fetchone()
+        return c.execute("SELECT * FROM market_symbols WHERE symbol_id=? AND is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'", (int(symbol_id),)).fetchone()
