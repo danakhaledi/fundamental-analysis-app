@@ -179,7 +179,7 @@ def market_auto_job_page(request: Request, notice: str = "", error: str = ""):
         return default
     return page(request, "market_auto_job.html", task=task_status(), logs=logs, notice=notice, error=error,
         stage_symbols=latest_stage(("SYMBOLS:", "START: daily"), "هنوز اجرا نشده"),
-        stage_resolution=latest_stage(("SQL_SYMBOL_TRANSFER",), "در انتظار انتقال نمادهای رسمی"),
+        stage_transfer=latest_stage(("SQL_SYMBOL_TRANSFER",), "در انتظار انتقال نمادهای رسمی"),
         stage_backfill=latest_stage(("BACKFILL_PASS_START", "BACKFILL pass=", "backfill did not"), "در انتظار اجرا"),
         stage_update=latest_stage(("PRICE_UPDATE:", "price update cycle"), "در انتظار اجرا"),
         stage_final=latest_stage(("FINAL_STATUS:", "END: daily", "FATAL:"), "در انتظار پایان مراحل قبلی"))
