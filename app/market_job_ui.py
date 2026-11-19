@@ -25,15 +25,14 @@ def task_status():
         return {'exists':True,'status':status,'raw':raw}
     except Exception as exc: return {'exists':False,'status':f'قابل بررسی نیست ({type(exc).__name__})','raw':''}
 
-def configure_task(hour, minute, resolve):
+def configure_task(hour, minute):
     if not (0 <= hour <= 23 and 0 <= minute <= 59): raise ValueError('ساعت اجرا معتبر نیست.')
-    if not (1 <= resolve <= 800): raise ValueError('اندازه دسته بررسی شناسه رسمی باید بین ۱ و ۸۰۰ باشد.')
     py = ROOT / '.venv' / 'Scripts' / 'python.exe'
     runner = ROOT / 'run_market_daily_sync.py'
     if not py.exists(): raise RuntimeError('محیط .venv پیدا نشد؛ ابتدا run_windows.bat را اجرا کنید.')
     # Use a small wrapper batch file to pass settings reliably to Task Scheduler.
     wrapper = ROOT / 'run_market_daily_task.bat'
-    wrapper.write_text('@echo off\r\ncd /d "'+str(ROOT)+'"\r\nset DAILY_SYMBOL_RESOLUTION_BATCH='+str(resolve)+'\r\n"'+str(py)+'" "'+str(runner)+'"\r\n', encoding='utf-8')
+    wrapper.write_text('@echo off\r\ncd /d "'+str(ROOT)+'"\r\n"'+str(py)+'" "'+str(runner)+'"\r\n', encoding='utf-8')
     command = f'cmd.exe /c ""{wrapper}""'
     p = subprocess.run(['schtasks','/Create','/F','/SC','DAILY','/TN',TASK_NAME,'/ST',f'{hour:02d}:{minute:02d}','/TR',command], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=20)
     if p.returncode: raise RuntimeError((p.stderr or p.stdout or 'ساخت زمان‌بندی ناموفق بود.')[-500:])
