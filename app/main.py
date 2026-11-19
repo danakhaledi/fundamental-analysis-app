@@ -176,8 +176,9 @@ def symbols_registry_sync(request: Request):
         market_transfer = transfer_official_market_symbols()
         totals = {
             "attempted": 0, "successfully_resolved": 0, "remaining_identities": 0,
-            "industries_from_tsetmc": 0, "industries_inserted": 0, "industries_updated": 0,
-            "companies_inserted": 0, "companies_existing": 0, "symbols_linked": 0,
+            "industries_from_tsetmc": 0, "parent_industries_from_tsetmc": 0,
+            "subindustries_from_tsetmc": 0, "industries_inserted": 0, "industries_updated": 0,
+            "companies_inserted": 0, "companies_existing": 0, "companies_reclassified": 0, "symbols_linked": 0,
             "symbols_without_market_row": 0, "industry_conflicts": 0,
             "company_link_conflicts": 0, "representative_symbol_conflicts": 0,
             "errors": []
@@ -201,8 +202,10 @@ def symbols_registry_sync(request: Request):
                 break
             previous_remaining = remaining
         notice = (
-            f"رجیستری رسمی پردازش شد؛ صنایع: {totals['industries_from_tsetmc']}، "
+            f"رجیستری رسمی پردازش شد؛ صنایع: {totals['industries_from_tsetmc']} "
+            f"(سرگروه: {totals['parent_industries_from_tsetmc']}، زیرگروه: {totals['subindustries_from_tsetmc']})، "
             f"شرکت جدید: {totals['companies_inserted']}، شرکت موجود: {totals['companies_existing']}، "
+            f"بازطبقه‌بندی‌شده: {totals['companies_reclassified']}، "
             f"نماد متصل‌شده: {totals['symbols_linked']}، هویت باقی‌مانده: {totals['remaining_identities']}، "
             f"تعارض‌ها: {totals['industry_conflicts'] + totals['company_link_conflicts'] + totals['representative_symbol_conflicts']}."
         )
