@@ -116,7 +116,7 @@ def _load_and_cache_identities(batch_size=500, max_workers=12):
             SELECT s.ins_code
             FROM market_symbols s
             LEFT JOIN tsetmc_identity_cache c ON c.ins_code=s.ins_code
-            WHERE s.ins_code<>'' AND s.ins_code NOT GLOB '*[^0-9]*'
+            WHERE s.is_active=1 AND s.ins_code<>'' AND s.ins_code NOT GLOB '*[^0-9]*'
               AND (c.ins_code IS NULL OR c.status<>'SUCCESS' OR c.company_key_source<>'cSocCSAC')
             ORDER BY s.symbol_id
             LIMIT ?
@@ -158,18 +158,18 @@ def _load_and_cache_identities(batch_size=500, max_workers=12):
                     ))
 
         total = db.execute("""SELECT COUNT(*) FROM market_symbols
-            WHERE ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'""").fetchone()[0]
+            WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'""").fetchone()[0]
         successful = db.execute("""
             SELECT COUNT(*)
             FROM market_symbols s
-    INNER JOIN tsetmc_identity_cache c ON c.ins_code = s.ins_code
-            WHERE s.ins_code<>'' AND s.ins_code NOT GLOB '*[^0-9]*'
+            INNER JOIN tsetmc_identity_cache c ON c.ins_code = s.ins_code
+            WHERE s.is_active=1 AND s.ins_code<>'' AND s.ins_code NOT GLOB '*[^0-9]*'
               AND c.status = 'SUCCESS'
               AND c.company_key_source = 'cSocCSAC'
             """).fetchone()[0]
         remaining = db.execute("""SELECT COUNT(*) FROM market_symbols s
             LEFT JOIN tsetmc_identity_cache c ON c.ins_code=s.ins_code
-            WHERE s.ins_code<>'' AND s.ins_code NOT GLOB '*[^0-9]*'
+            WHERE s.is_active=1 AND s.ins_code<>'' AND s.ins_code NOT GLOB '*[^0-9]*'
               AND (c.ins_code IS NULL OR c.status<>'SUCCESS' OR c.company_key_source<>'cSocCSAC')""").fetchone()[0]
 
     return {
@@ -202,7 +202,7 @@ def sync_tsetmc_registry(batch_size=500, max_workers=12):
         symbols = [dict(row) for row in db.execute("""
             SELECT ins_code,symbol,company_name
             FROM market_symbols
-            WHERE ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'
+            WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'
             ORDER BY symbol,ins_code
         """).fetchall()]
         identities = [dict(row) for row in db.execute("""
@@ -380,7 +380,7 @@ def preview_tsetmc_registry(batch_size=1000, max_workers=12):
     official_industries = {str(x["industry_code"]): x["industry_name"] for x in industries}
     with sqlite_connect() as db:
         symbols = [dict(r) for r in db.execute(
-            "SELECT ins_code,symbol,company_name FROM market_symbols WHERE ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'").fetchall()]
+            "SELECT ins_code,symbol,company_name FROM market_symbols WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'").fetchall()]
         identities = [dict(r) for r in db.execute(
             "SELECT ins_code,company_code,industry_code,industry_name FROM tsetmc_identity_cache WHERE status='SUCCESS' AND company_key_source='cSocCSAC'").fetchall()]
     cs = get_connection_string()
