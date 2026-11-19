@@ -5,7 +5,7 @@
 <header class="top"><div class="brand"><b>ف</b><div><strong>تحلیل بنیادی بورس</strong><small>پنل داده و پیش‌بینی</small></div></div>
 <div class="user">کاربر: {{ user["username"] }} <form method="post" action="/logout"><button>خروج</button></form></div></header>
 <div class="layout"><aside class="nav"><small>فضای کاری</small>
-<a href="/">◫　داشبورد</a><a href="/sales">▤　فروش ماهانه</a><a href="/forecast">⌁　پیش‌بینی ۱۴۰۵</a><a href="/valuation">◈　ارزش‌گذاری</a><a href="/symbols">▦　مدیریت نمادها</a><a href="/codal">⇩　مرکز دریافت کدال</a><small class="management">مدیریت</small><a href="/settings">⚙　وضعیت اتصال</a>
+<a href="/">◫　داشبورد</a><a href="/sales">▤　فروش ماهانه</a><a href="/forecast">⌁　پیش‌بینی ۱۴۰۵</a><a href="/valuation">◈　ارزش‌گذاری</a><a href="/data-management">⇅　مدیریت دریافت اطلاعات</a><a href="/symbols">▦　مدیریت نمادها</a><a href="/codal">⇩　مرکز دریافت کدال</a><small class="management">مدیریت</small><a href="/settings">⚙　وضعیت اتصال</a>
 <div class="foot">نسخه اولیه · محیط داخلی</div></aside><main class="content">{% block content %}{% endblock %}</main></div>
 {% else %}<main class="auth">{% block auth_content %}{% endblock %}</main>{% endif %}
 <script>

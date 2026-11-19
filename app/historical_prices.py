@@ -2,6 +2,7 @@
 from datetime import datetime
 import json
 import time
+import hashlib
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -61,24 +62,36 @@ def history_status():
         return {"symbols": symbols, "symbols_with_history": int(row[0]), "history_rows": int(row[1]), "min_date": row[2], "max_date": row[3]}
 
 
-def sync_history_batch(mode="backfill"):
-    """Process a resumable batch. mode=backfill processes symbols with no history; update cycles through all symbols."""
+def sync_history_batch(mode="backfill", ins_codes=None):
+    """Process a resumable batch for all instruments or an explicitly selected InsCode set."""
     from .appconfig import get_connection_string
     from .authdb import connect as sqlite_connect
+    selected_codes = sorted({str(x).strip() for x in (ins_codes or []) if str(x).strip().isdigit() and str(x).strip() != "0"})
+    sync_mode = mode
+    if selected_codes:
+        digest = hashlib.sha1(",".join(selected_codes).encode("ascii")).hexdigest()
+        sync_mode = "selected_" + digest
     cs = get_connection_string()
     if not cs:
         raise RuntimeError("اتصال SQL Server تنظیم نشده است.")
     import pyodbc
     with sqlite_connect() as db:
         db.execute("CREATE TABLE IF NOT EXISTS market_history_sync_state (mode TEXT PRIMARY KEY, last_ins_code TEXT NOT NULL DEFAULT '')")
-        state = db.execute("SELECT last_ins_code FROM market_history_sync_state WHERE mode=?", (mode,)).fetchone()
+        state = db.execute("SELECT last_ins_code FROM market_history_sync_state WHERE mode=?", (sync_mode,)).fetchone()
         last_code = state[0] if state else ""
     with pyodbc.connect(cs, timeout=20) as conn:
         cur = conn.cursor()
         cur.execute("SELECT OBJECT_ID('dbo.MarketDailyData','U')")
         if not cur.fetchone()[0]:
             raise RuntimeError("جدول dbo.MarketDailyData وجود ندارد.")
-        if mode == "backfill":
+        if selected_codes:
+            placeholders = ",".join("?" for _ in selected_codes)
+            query = f"""SELECT TOP (?) InsCode, Symbol FROM dbo.MarketSymbols
+                WHERE TRY_CONVERT(BIGINT, LTRIM(RTRIM(InsCode))) IS NOT NULL
+                  AND InsCode IN ({placeholders}) AND InsCode > ?
+                ORDER BY InsCode"""
+            cur.execute(query, BATCH_SIZE, *selected_codes, last_code)
+        elif mode == "backfill":
             cur.execute("""SELECT TOP (?) s.InsCode, s.Symbol FROM dbo.MarketSymbols s
                 WHERE TRY_CONVERT(BIGINT, LTRIM(RTRIM(s.InsCode))) IS NOT NULL
                 AND NOT EXISTS (SELECT 1 FROM dbo.MarketDailyData d WHERE d.InsCode=s.InsCode AND d.TradeDate IS NOT NULL)
@@ -93,7 +106,7 @@ def sync_history_batch(mode="backfill"):
             # all eligible symbols are already backfilled, or the cursor reached the end).
             with sqlite_connect() as db:
                 if last_code:
-                    db.execute("INSERT INTO market_history_sync_state(mode,last_ins_code) VALUES(?, '') ON CONFLICT(mode) DO UPDATE SET last_ins_code=''", (mode,))
+                    db.execute("INSERT INTO market_history_sync_state(mode,last_ins_code) VALUES(?, '') ON CONFLICT(mode) DO UPDATE SET last_ins_code=''", (sync_mode,))
             cur.execute("SELECT COUNT_BIG(*) FROM dbo.MarketSymbols")
             total_symbols = int(cur.fetchone()[0])
             cur.execute("SELECT COUNT_BIG(*) FROM dbo.MarketSymbols WHERE TRY_CONVERT(BIGINT, LTRIM(RTRIM(InsCode))) IS NOT NULL")
@@ -102,6 +115,8 @@ def sync_history_batch(mode="backfill"):
                 message = "جدول dbo.MarketSymbols خالی است؛ ابتدا انتقال نمادها از SQLite به SQL Server را از صفحه انتقال اطلاعات بازار انجام دهید."
             elif eligible_symbols == 0:
                 message = "هیچ نمادی با InsCode معتبر پیدا نشد؛ کد ابزار نمادها را بررسی کنید."
+            elif selected_codes:
+                message = "برای نمادهای انتخاب‌شده، رکورد دیگری در این مرحله باقی نمانده است."
             elif mode == "backfill":
                 message = "نماد واجد شرایط دیگری بدون تاریخچه باقی نمانده است."
             else:
@@ -144,6 +159,6 @@ def sync_history_batch(mode="backfill"):
                 errors.append(f"{symbol} ({ins_code}): SQL {type(exc).__name__}: {str(exc)[:160]}")
         new_last = symbols[-1][0]
         with sqlite_connect() as db:
-            db.execute("INSERT INTO market_history_sync_state(mode,last_ins_code) VALUES(?,?) ON CONFLICT(mode) DO UPDATE SET last_ins_code=excluded.last_ins_code", (mode, new_last))
+            db.execute("INSERT INTO market_history_sync_state(mode,last_ins_code) VALUES(?,?) ON CONFLICT(mode) DO UPDATE SET last_ins_code=excluded.last_ins_code", (sync_mode, new_last))
         # Backfill completes when fewer than a full batch returned. Update mode wraps on next click.
         return {"processed": len(symbols), "rows_added": added, "rows_updated": updated, "errors": errors, "cycle_complete": len(symbols) < BATCH_SIZE, "last_symbol": symbols[-1][1], "batch_size": BATCH_SIZE, "workers": MAX_WORKERS, "fetch_success": len(fetched)}

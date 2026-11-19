@@ -22,7 +22,7 @@ from .codal_products_stage import stage_product_reports
 from .codal_sales_stage import stage_sales_reports
 from .codal_state import initialize as initialize_codal_state, upsert_search_results, list_reports as list_codal_state_reports, get_reports as get_codal_state_reports, update_report as update_codal_state_report, summary as codal_state_summary, migrate_legacy_files as migrate_legacy_codal_files
 from .market_symbols import fetch_all_symbols
-from .tsetmc_registry import preview_tsetmc_registry
+from .tsetmc_registry import preview_tsetmc_registry, sync_tsetmc_registry
 from .historical_prices import history_status, sync_history_batch
 from .market_job_ui import read_log, task_status, configure_task, run_now, delete_task, LOG_FILE
 
@@ -166,6 +166,67 @@ def symbols_registry_preview(request: Request):
         return page(request, "tsetmc_registry_preview.html", preview=None,
                     error=f"پیش‌نمایش انجام نشد: {type(exc).__name__}: {str(exc)[:300]}")
 
+@app.post("/symbols/registry-sync", response_class=HTMLResponse)
+def symbols_registry_sync(request: Request):
+    user, redir = protect(request)
+    if redir: return redir
+    if user["role"] != "ADMIN":
+        return RedirectResponse("/symbols?error=admin", status_code=303)
+    try:
+        market_transfer = transfer_official_market_symbols()
+        totals = {
+            "attempted": 0, "successfully_resolved": 0, "remaining_identities": 0,
+            "industries_from_tsetmc": 0, "industries_inserted": 0, "industries_updated": 0,
+            "companies_inserted": 0, "companies_existing": 0, "symbols_linked": 0,
+            "symbols_without_market_row": 0, "industry_conflicts": 0,
+            "company_link_conflicts": 0, "representative_symbol_conflicts": 0,
+            "errors": []
+        }
+        previous_remaining = None
+        for pass_no in range(20):
+            result = sync_tsetmc_registry(batch_size=500, max_workers=12)
+            for key in totals:
+                if key == "errors":
+                    totals[key].extend(result.get(key, []))
+                elif key in result:
+                    if key == "industries_from_tsetmc":
+                        totals[key] = result[key]
+                    else:
+                        totals[key] += int(result.get(key) or 0)
+            remaining = int(result.get("remaining_identities", 0))
+            totals["remaining_identities"] = remaining
+            if remaining == 0 or int(result.get("attempted", 0)) == 0:
+                break
+            if previous_remaining is not None and remaining >= previous_remaining:
+                break
+            previous_remaining = remaining
+        notice = (
+            f"رجیستری رسمی پردازش شد؛ صنایع: {totals['industries_from_tsetmc']}، "
+            f"شرکت جدید: {totals['companies_inserted']}، شرکت موجود: {totals['companies_existing']}، "
+            f"نماد متصل‌شده: {totals['symbols_linked']}، هویت باقی‌مانده: {totals['remaining_identities']}، "
+            f"تعارض‌ها: {totals['industry_conflicts'] + totals['company_link_conflicts'] + totals['representative_symbol_conflicts']}."
+        )
+        if totals["remaining_identities"]:
+            notice += " بخشی از هویت‌ها دریافت نشد؛ عملیات را پس از بررسی خطاها دوباره اجرا کنید."
+        if totals["errors"]:
+            notice += " خطاهای نمونه: " + " | ".join(totals["errors"][:3])
+        notice += (
+            f" انتقال نمادها به SQL Server: {market_transfer['inserted_symbols']} درج، "
+            f"{market_transfer.get('updated_symbols', 0)} به‌روزرسانی."
+        )
+        return RedirectResponse("/symbols?notice=" + quote(notice[:1500]), status_code=303)
+    except Exception as exc:
+        return RedirectResponse("/symbols?error=" + quote(
+            f"همگام‌سازی صنایع و شرکت‌ها ناموفق بود: {type(exc).__name__}: {str(exc)[:300]}"), status_code=303)
+
+
+@app.get("/data-management", response_class=HTMLResponse)
+def data_management_page(request: Request):
+    user, redir = protect(request)
+    if redir: return redir
+    return page(request, "data_management.html", is_admin=user["role"] == "ADMIN")
+
+
 @app.get("/symbols/auto-job", response_class=HTMLResponse)
 def market_auto_job_page(request: Request, notice: str = "", error: str = ""):
     user, redir = protect(request)
@@ -271,7 +332,8 @@ def symbols_history_page(request: Request, mode: str = "", result: str = "", err
                     error=error or f"وضعیت تاریخچه خوانده نشد: {type(exc).__name__}: {str(exc)[:240]}")
 
 @app.post("/symbols/history/sync", response_class=HTMLResponse)
-def symbols_history_sync(request: Request, mode: str = Form("backfill")):
+def symbols_history_sync(request: Request, mode: str = Form("backfill"),
+                          symbols: str = Form("")):
     user, redir = protect(request)
     if redir: return redir
     if user["role"] != "ADMIN":
@@ -279,7 +341,25 @@ def symbols_history_sync(request: Request, mode: str = Form("backfill")):
     if mode not in ("backfill", "update"):
         mode = "backfill"
     try:
-        result = sync_history_batch(mode)
+        tokens = [x.strip().upper() for x in re.split(r"[,،;\s]+", symbols or "") if x.strip()]
+        selected_codes = None
+        if tokens:
+            available = market_symbol_rows()
+            by_symbol = {}
+            for row in available:
+                by_symbol.setdefault(str(row["symbol"]).strip().upper(), []).append(str(row["ins_code"]))
+            missing = [token for token in tokens if token not in by_symbol]
+            if missing:
+                raise ValueError("این نمادها در فهرست فعال SQLite پیدا نشدند: " + "، ".join(missing[:20]))
+            selected_codes = sorted({code for token in tokens for code in by_symbol[token]})
+        # Ensure destination symbol identities exist before inserting daily history.
+        transfer_official_market_symbols()
+        result = sync_history_batch(mode, ins_codes=selected_codes)
+        if selected_codes:
+            result["selected_symbols"] = len(selected_codes)
+            result["selection"] = "selected"
+        else:
+            result["selection"] = "all"
         stats = history_status()
         return page(request, "market_history.html", stats=stats, result=result, error=None)
     except Exception as exc:
