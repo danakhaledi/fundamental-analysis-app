@@ -20,7 +20,7 @@ if errorlevel 1 (echo Invalid numeric configuration.& pause& exit /b 1)
 set "PYTHON=%~dp0.venv\Scripts\python.exe"
 set "RUNNER=%~dp0run_market_daily_sync.py"
 set "TASKNAME=FundamentalWebApp-DailyMarketSync"
-set "TASKCMD=cmd.exe /c ""set DAILY_BACKFILL_PASSES=%BACKFILL% ^& cd /d ""%~dp0"" ^& ""%PYTHON%"" ""%RUNNER%"""" "
+set "TASKCMD=cmd.exe /c ""set DAILY_BACKFILL_PASSES=%BACKFILL% ^& cd /d ""%~dp0"" ^& ""%PYTHON%"" ""%RUNNER%""""
 schtasks /Create /F /SC DAILY /TN "%TASKNAME%" /ST "%JOBTIME%" /TR "%TASKCMD%"
 if errorlevel 1 (echo Failed to create task. Try running as the same Windows user as the app.& pause& exit /b 1)
 echo.
