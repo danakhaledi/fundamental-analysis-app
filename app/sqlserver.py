@@ -256,7 +256,9 @@ def transfer_official_market_symbols():
             # active market consumers, while retaining their rows and history.
             cur.execute(
                 """UPDATE dbo.MarketSymbols SET IsActive=0
-                   WHERE InstrumentCodeIsPlaceholder=1 AND IsActive<>0"""
+                   WHERE IsActive<>0
+                     AND (InstrumentCodeIsPlaceholder=1
+                          OR TRY_CONVERT(BIGINT,LTRIM(RTRIM(InsCode))) IS NULL)"""
             )
             conn.commit()
         except Exception:
