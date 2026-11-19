@@ -1,4 +1,4 @@
-﻿import os
+import os
 import json
 import uuid
 import re
@@ -173,6 +173,32 @@ def symbols_registry_sync(request: Request):
     if user["role"] != "ADMIN":
         return RedirectResponse("/symbols?error=admin", status_code=303)
     try:
+        # Resolve every official instrument identity and validate the complete
+        # company/industry mapping before the first SQL Server write.
+        preview = preview_tsetmc_registry(batch_size=1000, max_workers=12)
+        summary = preview["summary"]
+        blockers = {
+            "identities_remaining": int(summary.get("identities_remaining") or 0),
+            "identity_count_mismatch": max(
+                0, int(summary.get("official_symbols") or 0) -
+                   int(summary.get("identities_resolved") or 0)
+            ),
+            "industry_conflict": int(summary.get("industry_conflict") or 0),
+            "industry_missing": int(summary.get("industry_missing") or 0),
+            "industry_unknown": int(summary.get("industry_unknown") or 0),
+            "review": int(summary.get("review") or 0),
+            "symbol_link_conflict": int(summary.get("symbol_link_conflict") or 0),
+            "fetch_errors": len(preview.get("fetch", {}).get("errors") or []),
+        }
+        blockers = {key: value for key, value in blockers.items() if value}
+        if blockers:
+            detail = "، ".join(f"{key}={value}" for key, value in blockers.items())
+            raise RuntimeError(
+                "پیش‌بررسی رجیستری کامل و بدون تعارض نیست؛ هیچ تغییری در SQL Server انجام نشد. "
+                + detail
+            )
+
+        # Transfer only after the read-only preflight confirms complete identities.
         market_transfer = transfer_official_market_symbols()
         totals = {
             "attempted": 0, "successfully_resolved": 0, "remaining_identities": 0,
@@ -217,6 +243,11 @@ def symbols_registry_sync(request: Request):
             )
         if totals["errors"]:
             notice += " خطاهای نمونه: " + " | ".join(totals["errors"][:3])
+        if totals["remaining_identities"] or totals["errors"] or totals["industry_conflicts"] or totals["company_link_conflicts"] or totals["representative_symbol_conflicts"]:
+            raise RuntimeError(
+                "همگام‌سازی رجیستری به علت خطای اعتبارسنجی متوقف شد: "
+                + " | ".join(totals["errors"][:5])
+            )
         notice += (
             f" انتقال نمادها به SQL Server: {market_transfer['inserted_symbols']} درج، "
             f"{market_transfer.get('updated_symbols', 0)} به‌روزرسانی."

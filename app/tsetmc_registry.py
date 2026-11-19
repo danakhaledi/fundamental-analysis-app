@@ -403,6 +403,11 @@ def sync_tsetmc_registry(batch_size=500, max_workers=12):
                     elif int(current) != company_id:
                         company_conflicts += 1
                         errors.append(f"InsCode {identity['ins_code']} is already linked to CompanyID {current}; expected {company_id}.")
+            if errors or industry_conflicts or company_conflicts or symbol_conflicts or unlinked_symbols:
+                raise RuntimeError(
+                    "TSETMC registry validation failed; SQL Server transaction rolled back: "
+                    + " | ".join(errors[:5])
+                )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -516,6 +521,6 @@ def preview_tsetmc_registry(batch_size=1000, max_workers=12):
                         "parent_industries": parents, "subindustries": len(hierarchy) - parents,
                         "companies_detected": len(grouped), **counts,
                         "identities_remaining": fetch_result["remaining_identities"]},
-            "fetch": fetch_result, "companies": details[:250],
-            "companies_truncated": max(0, len(details) - 250)}
+            "fetch": fetch_result, "companies": details,
+            "companies_truncated": 0}
 
