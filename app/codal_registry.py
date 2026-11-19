@@ -76,7 +76,8 @@ def ensure_company_and_document(cur, report, item_names=None):
     cur.execute("""SELECT DISTINCT c.CompanyID
                    FROM dbo.MarketSymbols ms
                    INNER JOIN dbo.Companies c ON c.CompanyID=ms.CompanyID
-                   WHERE ms.Symbol=? AND TRY_CONVERT(BIGINT, LTRIM(RTRIM(ms.InsCode))) IS NOT NULL
+                   WHERE ms.Symbol=? AND ms.IsActive=1 AND ms.InstrumentCodeIsPlaceholder=0
+                     AND TRY_CONVERT(BIGINT, LTRIM(RTRIM(ms.InsCode))) IS NOT NULL
                      AND ms.CompanyID IS NOT NULL""", symbol)
     linked_companies = cur.fetchall()
     if len(linked_companies) != 1:
