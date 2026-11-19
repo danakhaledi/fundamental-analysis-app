@@ -99,6 +99,7 @@ def _normalize_api(payload):
             "isin": isin,
             "market_board": _board(merged),
             "flow": str(_first(merged, "flow", "flowCode")),
+            "source": "TSETMC",
             "raw_json": json.dumps(row, ensure_ascii=False),
         }
     return list(normalized.values())
@@ -148,6 +149,7 @@ def _fetch_legacy_market_watch():
                 "4": "بازار پایه فرابورس",
             }.get(flow, "نامشخص"),
             "flow": flow,
+            "source": "TSETMC",
             "raw_json": json.dumps(
                 {"source": "TSETMC MarketWatchInit", "columns": cols},
                 ensure_ascii=False,
@@ -166,7 +168,7 @@ def _previous_official_count():
         with connect() as db:
             row = db.execute(
                 "SELECT COUNT(*) FROM market_symbols "
-                "WHERE ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'"
+                "WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'"
             ).fetchone()
             return int(row[0] or 0)
     except Exception:
