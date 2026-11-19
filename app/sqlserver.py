@@ -139,6 +139,54 @@ def _sql_datetime(value):
         return None
 
 
+
+def official_market_symbol_transfer_status(ins_codes=None):
+    """Read-only check that official local InsCodes already exist in SQL Server."""
+    from .authdb import connect as sqlite_connect
+
+    if ins_codes is None:
+        with sqlite_connect() as db:
+            local_codes = {
+                str(row[0]).strip()
+                for row in db.execute(
+                    """SELECT ins_code FROM market_symbols
+                       WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'"""
+                ).fetchall()
+            }
+    else:
+        local_codes = {
+            str(code).strip() for code in ins_codes
+            if str(code).strip().isdigit() and str(code).strip() != "0"
+        }
+
+    cs = get_connection_string()
+    if not cs:
+        raise RuntimeError("اتصال SQL Server تنظیم نشده است.")
+    import pyodbc
+
+    with pyodbc.connect(cs, timeout=10) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT OBJECT_ID(?, 'U')", "dbo.MarketSymbols")
+        if cur.fetchone()[0] is None:
+            raise RuntimeError("جدول dbo.MarketSymbols وجود ندارد.")
+        cur.execute(
+            """SELECT InsCode FROM dbo.MarketSymbols
+               WHERE TRY_CONVERT(BIGINT, LTRIM(RTRIM(InsCode))) IS NOT NULL"""
+        )
+        destination_codes = {
+            str(row[0]).strip() for row in cur.fetchall()
+            if str(row[0] or "").strip().isdigit()
+        }
+
+    missing = sorted(local_codes - destination_codes)
+    return {
+        "local_count": len(local_codes),
+        "destination_count": len(destination_codes),
+        "missing_count": len(missing),
+        "missing_examples": missing[:10],
+    }
+
+
 def transfer_official_market_symbols():
     """Sync official numeric TSETMC InsCode records to SQL Server.
 
