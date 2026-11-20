@@ -5,6 +5,10 @@ identities. This module only fetches official TSETMC InsCode records.
 """
 import gzip
 import json
+import re
+import time
+import unicodedata
+import urllib.parse
 import urllib.request
 
 BASE = "https://cdn.tsetmc.com/api"
@@ -177,6 +181,94 @@ def _fetch_legacy_market_watch():
     return list(normalized.values())
 
 
+
+def _normalize_symbol_text(value):
+    """Normalize Persian/Arabic spelling variants for exact symbol matching."""
+    value = unicodedata.normalize("NFKC", str(value or ""))
+    value = value.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    value = value.replace("\u200c", "").replace("\u200f", "").replace("\u200e", "")
+    return re.sub(r"\s+", "", value).strip()
+
+
+def _fetch_missing_non_derivative_symbols_from_search(market_watch_codes):
+    """Supplement MarketWatch with exact TSETMC search matches for known non-derivative symbols.
+
+    The local registry supplies only the symbol names to search; identity and
+    metadata are accepted exclusively from exact TSETMC InstrumentSearch rows.
+    Suspended instruments are intentionally not filtered by trading status.
+    Derivatives are deferred to the separate derivatives integration step.
+    """
+    try:
+        from .authdb import connect
+        with connect() as db:
+            existing_rows = db.execute(
+                "SELECT ins_code, symbol, market_board FROM market_symbols "
+                "WHERE is_active=1 AND ins_code<>'' "
+                "AND ins_code NOT GLOB '*[^0-9]*'"
+            ).fetchall()
+    except Exception:
+        return []
+
+    missing_symbols = {}
+    for row in existing_rows:
+        code = str(row["ins_code"] or "").strip()
+        symbol = str(row["symbol"] or "").strip()
+        board = str(row["market_board"] or "")
+        if not code or code in market_watch_codes or not symbol:
+            continue
+        if "مشتقه" in board:
+            continue
+        normalized = _normalize_symbol_text(symbol)
+        if normalized:
+            missing_symbols.setdefault(normalized, symbol)
+
+    found = {}
+    for normalized, symbol in missing_symbols.items():
+        url = BASE + "/Instrument/GetInstrumentSearch/" + urllib.parse.quote(symbol, safe="")
+        try:
+            payload = _request_json(url, timeout=30)
+        except Exception:
+            continue
+
+        rows = payload
+        if isinstance(payload, dict):
+            rows = payload.get("instrumentSearch")
+            if rows is None:
+                rows = payload.get("InstrumentSearch")
+            if rows is None:
+                rows = payload
+
+        for row in _walk_dicts(rows):
+            instrument = row.get("instrument") if isinstance(row.get("instrument"), dict) else {}
+            merged = dict(row)
+            merged.update(instrument)
+
+            code = str(_first(merged, "insCode", "InsCode", "instrumentCode")).strip()
+            found_symbol = str(_first(
+                merged, "lVal18AFC", "symbol", "shortName", "Symbol"
+            )).strip()
+            if not code.isdigit() or code == "0":
+                continue
+            if _normalize_symbol_text(found_symbol) != normalized:
+                continue
+
+            found[code] = {
+                "ins_code": code,
+                "symbol": found_symbol,
+                "company_name": str(_first(
+                    merged, "lVal30", "companyName", "longName", "CompanyName"
+                )).strip(),
+                "isin": str(_first(merged, "cIsin", "insID", "isin", "ISIN")).strip(),
+                "market_board": _board(merged),
+                "flow": str(_first(merged, "flow", "flowCode")),
+                "source": "TSETMC",
+                "raw_json": json.dumps(row, ensure_ascii=False),
+            }
+
+        time.sleep(0.10)
+
+    return list(found.values())
+
 def _previous_official_count():
     """Read the last local official-universe size for truncation detection."""
     try:
@@ -259,6 +351,13 @@ def fetch_all_symbols():
             code = str(row["ins_code"])
             if code not in combined or source == "new_api":
                 combined[code] = row
+
+    market_watch_codes = set(combined)
+    supplemental_rows = _fetch_missing_non_derivative_symbols_from_search(
+        market_watch_codes
+    )
+    for row in supplemental_rows:
+        combined.setdefault(str(row["ins_code"]), row)
 
     result = list(combined.values())
     _validate_full_snapshot(result, _previous_official_count())
