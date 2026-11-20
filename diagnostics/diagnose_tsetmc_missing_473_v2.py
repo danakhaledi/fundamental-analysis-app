@@ -235,7 +235,6 @@ def inspect_searches(rows, timeout, delay):
                 "old_ins_code_found": any(
                     rec["ins_code"] == item["old_ins_code"] for rec in exact
                 ),
-                "json_shape": json_shape(payload, max_samples=3),
             })
         except Exception as exc:
             item["error"] = f"{type(exc).__name__}: {exc}"
