@@ -1,4 +1,4 @@
-﻿import os
+import os
 import json
 import uuid
 import re
@@ -14,15 +14,15 @@ from .dotenv import load_env
 load_env()
 from .authdb import initialize, get_user, set_password, list_users, create_user, update_user_policy, set_user_active, force_password_reset, record_login, upsert_market_symbols, list_market_symbols, market_symbol_count, get_market_symbol
 from .security import verify_password
-from .sqlserver import status, read_view, VIEWS, market_migration_counts, transfer_market_data, transfer_official_market_symbols
+from .sqlserver import status, read_view, VIEWS, market_migration_counts, transfer_market_data, transfer_official_market_symbols, official_market_symbol_transfer_status
 from .appconfig import save_connection_string, get_connection_string, has_saved_connection
 from .codal_center import search_codal_reports, search_codal_for_symbols, download_excel_reports, extract_downloaded_reports
 from .codal_resource_stage import stage_resource_reports
 from .codal_products_stage import stage_product_reports
 from .codal_sales_stage import stage_sales_reports
 from .codal_state import initialize as initialize_codal_state, upsert_search_results, list_reports as list_codal_state_reports, get_reports as get_codal_state_reports, update_report as update_codal_state_report, summary as codal_state_summary, migrate_legacy_files as migrate_legacy_codal_files
-from .market_symbols import fetch_all_symbols, resolve_official_symbols_batch
-from .tsetmc_registry import preview_tsetmc_registry
+from .market_symbols import fetch_all_symbols
+from .tsetmc_registry import preview_tsetmc_registry, sync_tsetmc_registry
 from .historical_prices import history_status, sync_history_batch
 from .market_job_ui import read_log, task_status, configure_task, run_now, delete_task, LOG_FILE
 
@@ -166,6 +166,108 @@ def symbols_registry_preview(request: Request):
         return page(request, "tsetmc_registry_preview.html", preview=None,
                     error=f"پیش‌نمایش انجام نشد: {type(exc).__name__}: {str(exc)[:300]}")
 
+@app.post("/symbols/registry-sync", response_class=HTMLResponse)
+def symbols_registry_sync(request: Request):
+    user, redir = protect(request)
+    if redir: return redir
+    if user["role"] != "ADMIN":
+        return RedirectResponse("/symbols?error=admin", status_code=303)
+    try:
+        transfer_status = official_market_symbol_transfer_status()
+        if not transfer_status["local_count"]:
+            raise RuntimeError("فهرست محلی نمادها خالی است؛ ابتدا فهرست را از TSETMC تازه‌سازی کنید.")
+        if transfer_status["missing_count"]:
+            examples = "، ".join(transfer_status["missing_examples"])
+            raise RuntimeError(
+                f"{transfer_status['missing_count']} نماد رسمی هنوز در dbo.MarketSymbols نیست. "
+                "ابتدا عملیات «انتقال نمادهای رسمی به SQL Server» را جداگانه اجرا کنید. "
+                f"نمونه InsCodeها: {examples}"
+            )
+        # Resolve every official instrument identity and validate the complete
+        # company/industry mapping before the first SQL Server write.
+        preview = preview_tsetmc_registry(batch_size=1000, max_workers=12)
+        summary = preview["summary"]
+        blockers = {
+            "identities_remaining": int(summary.get("identities_remaining") or 0),
+            "identity_count_mismatch": int(
+                int(summary.get("official_symbols") or 0) !=
+                int(summary.get("identities_resolved") or 0)
+            ),
+            "industry_conflict": int(summary.get("industry_conflict") or 0),
+            "industry_missing": int(summary.get("industry_missing") or 0),
+            "industry_unknown": int(summary.get("industry_unknown") or 0),
+            "review": int(summary.get("review") or 0),
+            "symbol_link_conflict": int(summary.get("symbol_link_conflict") or 0),
+        }
+        blockers = {key: value for key, value in blockers.items() if value}
+        if blockers:
+            detail = "، ".join(f"{key}={value}" for key, value in blockers.items())
+            raise RuntimeError(
+                "پیش‌بررسی رجیستری کامل و بدون تعارض نیست؛ هیچ تغییری در SQL Server انجام نشد. "
+                + detail
+            )
+
+        totals = {
+            "attempted": 0, "successfully_resolved": 0, "remaining_identities": 0,
+            "industries_from_tsetmc": 0, "parent_industries_from_tsetmc": 0,
+            "subindustries_from_tsetmc": 0, "industries_inserted": 0, "industries_updated": 0,
+            "companies_inserted": 0, "companies_existing": 0, "companies_reclassified": 0, "symbols_linked": 0,
+            "symbols_without_market_row": 0, "industry_conflicts": 0,
+            "company_link_conflicts": 0, "representative_symbol_conflicts": 0,
+            "errors": []
+        }
+        previous_remaining = None
+        for pass_no in range(20):
+            result = sync_tsetmc_registry(batch_size=500, max_workers=12)
+            for key in totals:
+                if key == "errors":
+                    totals[key].extend(result.get(key, []))
+                elif key in result:
+                    if key == "industries_from_tsetmc":
+                        totals[key] = result[key]
+                    else:
+                        totals[key] += int(result.get(key) or 0)
+            remaining = int(result.get("remaining_identities", 0))
+            totals["remaining_identities"] = remaining
+            if remaining == 0 or int(result.get("attempted", 0)) == 0:
+                break
+            if previous_remaining is not None and remaining >= previous_remaining:
+                break
+            previous_remaining = remaining
+        if totals["remaining_identities"]:
+            notice = (
+                f"دریافت هویت‌های TSETMC کامل نشد؛ {totals['remaining_identities']} هویت باقی مانده است. "
+                "برای جلوگیری از ثبت طبقه‌بندی ناقص، همگام‌سازی صنایع و شرکت‌ها در SQL Server انجام نشد."
+            )
+        else:
+            notice = (
+                f"رجیستری رسمی پردازش شد؛ صنایع: {totals['industries_from_tsetmc']} "
+                f"(سرگروه: {totals['parent_industries_from_tsetmc']}، زیرگروه: {totals['subindustries_from_tsetmc']})، "
+                f"شرکت جدید: {totals['companies_inserted']}، شرکت موجود: {totals['companies_existing']}، "
+                f"بازطبقه‌بندی‌شده: {totals['companies_reclassified']}، "
+                f"نماد متصل‌شده: {totals['symbols_linked']}، "
+                f"تعارض‌ها: {totals['industry_conflicts'] + totals['company_link_conflicts'] + totals['representative_symbol_conflicts']}."
+            )
+        if totals["errors"]:
+            notice += " خطاهای نمونه: " + " | ".join(totals["errors"][:3])
+        if totals["remaining_identities"] or totals["errors"] or totals["industry_conflicts"] or totals["company_link_conflicts"] or totals["representative_symbol_conflicts"]:
+            raise RuntimeError(
+                "همگام‌سازی رجیستری به علت خطای اعتبارسنجی متوقف شد: "
+                + " | ".join(totals["errors"][:5])
+            )
+        return RedirectResponse("/symbols?notice=" + quote(notice[:1500]), status_code=303)
+    except Exception as exc:
+        return RedirectResponse("/symbols?error=" + quote(
+            f"همگام‌سازی صنایع و شرکت‌ها ناموفق بود: {type(exc).__name__}: {str(exc)[:300]}"), status_code=303)
+
+
+@app.get("/data-management", response_class=HTMLResponse)
+def data_management_page(request: Request):
+    user, redir = protect(request)
+    if redir: return redir
+    return page(request, "data_management.html", is_admin=user["role"] == "ADMIN")
+
+
 @app.get("/symbols/auto-job", response_class=HTMLResponse)
 def market_auto_job_page(request: Request, notice: str = "", error: str = ""):
     user, redir = protect(request)
@@ -179,7 +281,7 @@ def market_auto_job_page(request: Request, notice: str = "", error: str = ""):
         return default
     return page(request, "market_auto_job.html", task=task_status(), logs=logs, notice=notice, error=error,
         stage_symbols=latest_stage(("SYMBOLS:", "START: daily"), "هنوز اجرا نشده"),
-        stage_resolution=latest_stage(("SYMBOL_RESOLUTION", "SQL_SYMBOL_TRANSFER"), "در انتظار اجرا"),
+        stage_transfer=latest_stage(("SQL_SYMBOL_TRANSFER",), "در انتظار انتقال نمادهای رسمی"),
         stage_backfill=latest_stage(("BACKFILL_PASS_START", "BACKFILL pass=", "backfill did not"), "در انتظار اجرا"),
         stage_update=latest_stage(("PRICE_UPDATE:", "price update cycle"), "در انتظار اجرا"),
         stage_final=latest_stage(("FINAL_STATUS:", "END: daily", "FATAL:"), "در انتظار پایان مراحل قبلی"))
@@ -194,13 +296,12 @@ def market_auto_job_log_download(request: Request):
     return FileResponse(str(LOG_FILE), filename="market_daily_sync.log", media_type="text/plain; charset=utf-8")
 
 @app.post("/symbols/auto-job/configure")
-def market_auto_job_configure(request: Request, hour: int = Form(7), minute: int = Form(0),
-                              resolution_batch: int = Form(500)):
+def market_auto_job_configure(request: Request, hour: int = Form(7), minute: int = Form(0)):
     user, redir = protect(request)
     if redir: return redir
     if user["role"] != "ADMIN": return RedirectResponse("/symbols?error=admin", status_code=303)
     try:
-        message = configure_task(hour, minute, resolution_batch)
+        message = configure_task(hour, minute)
         return RedirectResponse("/symbols/auto-job?notice=" + quote(message[:200]), status_code=303)
     except Exception as exc:
         return RedirectResponse("/symbols/auto-job?error=" + quote(f"تنظیم جاب انجام نشد: {type(exc).__name__}: {str(exc)[:250]}"), status_code=303)
@@ -272,7 +373,8 @@ def symbols_history_page(request: Request, mode: str = "", result: str = "", err
                     error=error or f"وضعیت تاریخچه خوانده نشد: {type(exc).__name__}: {str(exc)[:240]}")
 
 @app.post("/symbols/history/sync", response_class=HTMLResponse)
-def symbols_history_sync(request: Request, mode: str = Form("backfill")):
+def symbols_history_sync(request: Request, mode: str = Form("backfill"),
+                          symbols: str = Form("")):
     user, redir = protect(request)
     if redir: return redir
     if user["role"] != "ADMIN":
@@ -280,7 +382,31 @@ def symbols_history_sync(request: Request, mode: str = Form("backfill")):
     if mode not in ("backfill", "update"):
         mode = "backfill"
     try:
-        result = sync_history_batch(mode)
+        tokens = [x.strip().upper() for x in re.split(r"[,،;\s]+", symbols or "") if x.strip()]
+        selected_codes = None
+        if tokens:
+            available = market_symbol_rows()
+            by_symbol = {}
+            for row in available:
+                by_symbol.setdefault(str(row["symbol"]).strip().upper(), []).append(str(row["ins_code"]))
+            missing = [token for token in tokens if token not in by_symbol]
+            if missing:
+                raise ValueError("این نمادها در فهرست فعال SQLite پیدا نشدند: " + "، ".join(missing[:20]))
+            selected_codes = sorted({code for token in tokens for code in by_symbol[token]})
+        transfer_status = official_market_symbol_transfer_status(selected_codes)
+        if transfer_status["missing_count"]:
+            examples = "، ".join(transfer_status["missing_examples"])
+            raise RuntimeError(
+                f"{transfer_status['missing_count']} نماد انتخابی هنوز در dbo.MarketSymbols نیست. "
+                "ابتدا از صفحه مدیریت نمادها عملیات انتقال نمادهای رسمی به SQL Server را اجرا کنید. "
+                f"نمونه InsCodeها: {examples}"
+            )
+        result = sync_history_batch(mode, ins_codes=selected_codes)
+        if selected_codes:
+            result["selected_symbols"] = len(selected_codes)
+            result["selection"] = "selected"
+        else:
+            result["selection"] = "all"
         stats = history_status()
         return page(request, "market_history.html", stats=stats, result=result, error=None)
     except Exception as exc:
@@ -289,35 +415,51 @@ def symbols_history_sync(request: Request, mode: str = Form("backfill")):
         return page(request, "market_history.html", stats=stats, result=None,
                     error=f"دریافت/ثبت تاریخچه کامل نشد: {type(exc).__name__}: {str(exc)[:260]}")
 
-@app.post("/symbols/sync", response_class=HTMLResponse)
-def symbols_sync(request: Request):
+@app.post("/symbols/refresh", response_class=HTMLResponse)
+@app.post("/symbols/sync", response_class=HTMLResponse, include_in_schema=False)
+def symbols_refresh(request: Request):
+    """Refresh the local SQLite symbol master only; never writes to SQL Server."""
     user, redir = protect(request)
     if redir: return redir
     if user["role"] != "ADMIN":
         return RedirectResponse("/symbols?error=admin", status_code=303)
     try:
         rows = fetch_all_symbols()
-        count = upsert_market_symbols(rows)
-        # Official ID resolution is part of the normal symbol sync, not a separate action.
-        resolution = resolve_official_symbols_batch(batch_size=500, max_workers=16)
-        sql_message = ""
-        try:
-            sql_result = transfer_official_market_symbols()
-            sql_message = f" انتقال SQL Server: {sql_result['inserted_symbols']} جدید، {sql_result.get('updated_symbols', 0)} رکورد قبلی با کد رسمی به‌روزرسانی شد، {sql_result['skipped_symbols']} متعارض/از قبل موجود."
-        except Exception as sql_exc:
-            sql_message = f" انتقال به SQL Server انجام نشد: {type(sql_exc).__name__}: {str(sql_exc)[:140]}"
-        details = (f"فهرست بازار همگام شد: {count} رکورد؛ جست‌وجوی شناسه رسمی در این نوبت: "
-                   f"{resolution['attempted']} نماد، تطبیق موفق: {resolution['matched']}، "
-                   f"نمادهای دارای کد موقت باقی‌مانده: {resolution['remaining_placeholders']}، "
-                   f"نمادهای هنوز بررسی‌نشده: {resolution['unattempted_remaining']}؛ هم‌زمانی درخواست‌ها: {resolution.get('workers', 1)}.{sql_message}")
-        if resolution.get("errors"):
-            details += " خطاهای نمونه جست‌وجو: " + "؛ ".join(resolution["errors"])
-        details += " رجیستری شرکت‌ها و صنایع هنوز تغییری نکرده است؛ برای بررسی پیشنهادها از گزینه «پیش‌نمایش رجیستری رسمی» استفاده کنید."
-        return page(request, "symbols.html", count=market_symbol_count(), notice=details, error=None,
-                    is_admin=True)
+        processed = upsert_market_symbols(rows)
+        details = (
+            f"فهرست رسمی TSETMC در SQLite محلی به‌روزرسانی شد؛ "
+            f"دریافت‌شده: {len(rows)}، پردازش‌شده (درج/به‌روزرسانی): {processed}، "
+            f"کل نمادهای فعال محلی: {market_symbol_count()}. "
+            "در این عملیات هیچ تغییری در SQL Server انجام نشد."
+        )
+        return RedirectResponse("/symbols?notice=" + quote(details[:1400]), status_code=303)
     except Exception as exc:
-        return page(request, "symbols.html", count=market_symbol_count(), notice="",
-                    error=f"همگام‌سازی انجام نشد: {type(exc).__name__}: {str(exc)[:240]}", is_admin=True)
+        return RedirectResponse("/symbols?error=" + quote(
+            f"به‌روزرسانی محلی نمادها انجام نشد: {type(exc).__name__}: {str(exc)[:240]}"),
+            status_code=303)
+
+
+@app.post("/symbols/sql-transfer", response_class=HTMLResponse)
+def symbols_sql_transfer(request: Request):
+    """Explicitly transfer the local official symbol master to SQL Server."""
+    user, redir = protect(request)
+    if redir: return redir
+    if user["role"] != "ADMIN":
+        return RedirectResponse("/symbols?error=admin", status_code=303)
+    try:
+        result = transfer_official_market_symbols()
+        details = (
+            f"انتقال نمادهای رسمی به SQL Server انجام شد؛ "
+            f"نمادهای بررسی‌شده: {result['official_symbols_found']}، "
+            f"درج جدید: {result['inserted_symbols']}، "
+            f"به‌روزرسانی: {result['updated_symbols']}، "
+            f"رکوردهای legacy غیرفعال‌شده: {result['legacy_placeholders_archived']}."
+        )
+        return RedirectResponse("/symbols?notice=" + quote(details[:1400]), status_code=303)
+    except Exception as exc:
+        return RedirectResponse("/symbols?error=" + quote(
+            f"انتقال نمادها به SQL Server انجام نشد: {type(exc).__name__}: {str(exc)[:260]}"),
+            status_code=303)
 
 def _codal_data_dir():
     return ROOT.parent / "data" / "codal_downloads"

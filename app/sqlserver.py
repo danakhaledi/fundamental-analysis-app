@@ -44,7 +44,7 @@ def market_migration_counts():
     from .authdb import connect as sqlite_connect
     local = {}
     with sqlite_connect() as db:
-        local["symbols"] = db.execute("SELECT COUNT(*) FROM market_symbols").fetchone()[0]
+        local["symbols"] = db.execute("SELECT COUNT(*) FROM market_symbols WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'").fetchone()[0]
         local["daily"] = db.execute("SELECT COUNT(*) FROM market_daily_data").fetchone()[0]
     cs = get_connection_string()
     if not cs:
@@ -74,8 +74,8 @@ def transfer_market_data():
         raise RuntimeError("اتصال SQL Server تنظیم نشده است.")
     import pyodbc
     with sqlite_connect() as db:
-        symbols = [dict(r) for r in db.execute("SELECT * FROM market_symbols ORDER BY symbol_id").fetchall()]
-        daily = [dict(r) for r in db.execute("SELECT * FROM market_daily_data ORDER BY market_data_id").fetchall()]
+        symbols = [dict(r) for r in db.execute("SELECT * FROM market_symbols WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' ORDER BY symbol_id").fetchall()]
+        daily = [dict(r) for r in db.execute("SELECT * FROM market_daily_data WHERE ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*' ORDER BY market_data_id").fetchall()]
     inserted_symbols = inserted_daily = skipped_symbols = skipped_daily = 0
     with pyodbc.connect(cs, timeout=10) as conn:
         cur = conn.cursor()
@@ -97,7 +97,7 @@ def transfer_market_data():
                     r["symbol_id"], r["ins_code"], r["symbol"], r["company_name"], r["isin"],
                     r["market_board"], r["flow"], r["raw_json"], bool(r["is_active"]),
                     _sql_datetime(r.get("last_synced_at")), _sql_datetime(r.get("updated_at")),
-                    bool(r.get("instrument_code_is_placeholder", 0)))
+                    False)
                 inserted_symbols += 1
             for r in daily:
                 cur.execute("SELECT 1 FROM dbo.MarketDailyData WHERE LocalMarketDataID = ?", r["market_data_id"])
@@ -139,64 +139,196 @@ def _sql_datetime(value):
         return None
 
 
-def transfer_official_market_symbols():
-    """Sync locally verified numeric TSETMC codes to SQL Server, upgrading placeholder rows in place."""
+
+def official_market_symbol_transfer_status(ins_codes=None):
+    """Read-only check that official local InsCodes already exist in SQL Server."""
     from .authdb import connect as sqlite_connect
+
+    if ins_codes is None:
+        with sqlite_connect() as db:
+            local_codes = {
+                str(row[0]).strip()
+                for row in db.execute(
+                    """SELECT ins_code FROM market_symbols
+                       WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'"""
+                ).fetchall()
+            }
+    else:
+        local_codes = {
+            str(code).strip() for code in ins_codes
+            if str(code).strip().isdigit() and str(code).strip() != "0"
+        }
+
     cs = get_connection_string()
     if not cs:
         raise RuntimeError("اتصال SQL Server تنظیم نشده است.")
     import pyodbc
+
+    with pyodbc.connect(cs, timeout=10) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT OBJECT_ID(?, 'U')", "dbo.MarketSymbols")
+        if cur.fetchone()[0] is None:
+            raise RuntimeError("جدول dbo.MarketSymbols وجود ندارد.")
+        cur.execute(
+            """SELECT InsCode FROM dbo.MarketSymbols
+               WHERE IsActive=1
+                 AND TRY_CONVERT(BIGINT, LTRIM(RTRIM(InsCode))) IS NOT NULL"""
+        )
+        destination_codes = {
+            str(row[0]).strip() for row in cur.fetchall()
+            if str(row[0] or "").strip().isdigit()
+        }
+
+    missing = sorted(local_codes - destination_codes)
+    return {
+        "local_count": len(local_codes),
+        "destination_count": len(destination_codes),
+        "missing_count": len(missing),
+        "missing_examples": missing[:10],
+    }
+
+
+def transfer_official_market_symbols():
+    """Sync official numeric TSETMC InsCode records to SQL Server.
+
+    Legacy placeholder parents are only deactivated and detached from their
+    local IDs. They and their historical children are not deleted or rewritten.
+    """
+    from .authdb import connect as sqlite_connect
+
+    cs = get_connection_string()
+    if not cs:
+        raise RuntimeError("اتصال SQL Server تنظیم نشده است.")
+    import pyodbc
+
     with sqlite_connect() as db:
         rows = [dict(r) for r in db.execute(
-            "SELECT * FROM market_symbols WHERE instrument_code_is_placeholder=0 ORDER BY symbol_id"
+            """SELECT * FROM market_symbols
+               WHERE is_active=1 AND ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'
+               ORDER BY symbol_id"""
         ).fetchall()]
-    rows = [r for r in rows if str(r.get("ins_code", "")).isdigit()]
-    inserted = updated = skipped = 0
+
+    if not rows:
+        raise RuntimeError(
+            "فهرست محلی نمادهای رسمی خالی است؛ برای جلوگیری از هرگونه تغییر ناخواسته در SQL Server، انتقال انجام نشد."
+        )
+
+    inserted = updated = skipped = archived_legacy = 0
     with pyodbc.connect(cs, timeout=15) as conn:
         cur = conn.cursor()
         cur.execute("SELECT OBJECT_ID(?, 'U')", "dbo.MarketSymbols")
         if cur.fetchone()[0] is None:
             raise RuntimeError("جدول dbo.MarketSymbols وجود ندارد.")
+
         try:
-            for r in rows:
-                cur.execute("SELECT MarketSymbolID, InsCode, InstrumentCodeIsPlaceholder FROM dbo.MarketSymbols WHERE LocalSymbolID=?", r["symbol_id"])
-                local_match = cur.fetchone()
-                cur.execute("SELECT MarketSymbolID FROM dbo.MarketSymbols WHERE InsCode=?", r["ins_code"])
-                code_match = cur.fetchone()
-                if code_match and (not local_match or code_match[0] != local_match[0]):
+            for row in rows:
+                ins_code = str(row["ins_code"]).strip()
+                if not ins_code.isdigit():
                     skipped += 1
                     continue
-                params = (r["ins_code"], r["symbol"], r["company_name"], r["isin"], r["market_board"], r["flow"],
-                          r["raw_json"], bool(r["is_active"]), _sql_datetime(r.get("last_synced_at")), _sql_datetime(r.get("updated_at")))
-                if local_match:
-                    old_code = local_match[1]
-                    old_is_placeholder = bool(local_match[2])
-                    if old_is_placeholder and old_code != r["ins_code"]:
-                        # Do not UPDATE the referenced InsCode in place: SQL Server
-                        # correctly blocks that while MarketDailyData rows reference it.
-                        # Create the official parent, move children, remove the old
-                        # placeholder parent, then attach LocalSymbolID to the new row.
-                        cur.execute("""INSERT INTO dbo.MarketSymbols
-                            (LocalSymbolID, InsCode, Symbol, CompanyName, ISIN, MarketBoard, Flow, RawJson,
-                             IsActive, LastSyncedAt, UpdatedAt, InstrumentCodeIsPlaceholder)
-                            VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""", *params)
-                        new_id = cur.execute("SELECT MarketSymbolID FROM dbo.MarketSymbols WHERE InsCode=?", r["ins_code"]).fetchone()[0]
-                        cur.execute("UPDATE dbo.MarketDailyData SET InsCode=?, Symbol=? WHERE InsCode=?", r["ins_code"], r["symbol"], old_code)
-                        cur.execute("DELETE FROM dbo.MarketSymbols WHERE MarketSymbolID=?", local_match[0])
-                        cur.execute("UPDATE dbo.MarketSymbols SET LocalSymbolID=? WHERE MarketSymbolID=?", r["symbol_id"], new_id)
-                    else:
-                        cur.execute("""UPDATE dbo.MarketSymbols SET Symbol=?, CompanyName=?, ISIN=?, MarketBoard=?, Flow=?, RawJson=?, IsActive=?, LastSyncedAt=?, UpdatedAt=?, InstrumentCodeIsPlaceholder=0 WHERE MarketSymbolID=?""",
-                                    r["symbol"], r["company_name"], r["isin"], r["market_board"], r["flow"], r["raw_json"], bool(r["is_active"]), _sql_datetime(r.get("last_synced_at")), _sql_datetime(r.get("updated_at")), local_match[0])
+
+                cur.execute(
+                    """SELECT MarketSymbolID,InsCode,InstrumentCodeIsPlaceholder,LocalSymbolID
+                       FROM dbo.MarketSymbols WHERE InsCode=?""",
+                    ins_code,
+                )
+                code_match = cur.fetchone()
+
+                cur.execute(
+                    """SELECT MarketSymbolID,InsCode,InstrumentCodeIsPlaceholder,LocalSymbolID
+                       FROM dbo.MarketSymbols WHERE LocalSymbolID=?""",
+                    row["symbol_id"],
+                )
+                local_match = cur.fetchone()
+
+                if local_match and bool(local_match[2]) and (
+                    not code_match or int(code_match[0]) != int(local_match[0])
+                ):
+                    # Preserve the old parent and its daily rows; release its local
+                    # key so the official InsCode can be attached without deleting data.
+                    cur.execute(
+                        """UPDATE dbo.MarketSymbols
+                           SET LocalSymbolID=NULL,IsActive=0
+                           WHERE MarketSymbolID=? AND InstrumentCodeIsPlaceholder=1""",
+                        int(local_match[0]),
+                    )
+                    archived_legacy += 1
+                    local_match = None
+
+                params = (
+                    row["symbol"], row["company_name"], row["isin"], row["market_board"],
+                    row["flow"], row["raw_json"], bool(row["is_active"]),
+                    _sql_datetime(row.get("last_synced_at")),
+                    _sql_datetime(row.get("updated_at")),
+                )
+
+                if code_match:
+                    if local_match and int(local_match[0]) != int(code_match[0]):
+                        skipped += 1
+                        continue
+                    code_id = int(code_match[0])
+                    current_local_id = code_match[3]
+                    if current_local_id not in (None, row["symbol_id"]):
+                        skipped += 1
+                        continue
+                    cur.execute(
+                        """UPDATE dbo.MarketSymbols
+                           SET LocalSymbolID=?,Symbol=?,CompanyName=?,ISIN=?,MarketBoard=?,
+                               Flow=?,RawJson=?,IsActive=?,LastSyncedAt=?,UpdatedAt=?,
+                               InstrumentCodeIsPlaceholder=0
+                           WHERE MarketSymbolID=?""",
+                        row["symbol_id"], *params, code_id,
+                    )
                     updated += 1
-                else:
-                    cur.execute("""INSERT INTO dbo.MarketSymbols
-                        (LocalSymbolID, InsCode, Symbol, CompanyName, ISIN, MarketBoard, Flow, RawJson, IsActive, LastSyncedAt, UpdatedAt, InstrumentCodeIsPlaceholder)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
-                        r["symbol_id"], *params)
-                    inserted += 1
+                    continue
+
+                if local_match:
+                    # An official local identity must not silently change InsCode.
+                    if str(local_match[1]).strip() != ins_code or bool(local_match[2]):
+                        skipped += 1
+                        continue
+                    cur.execute(
+                        """UPDATE dbo.MarketSymbols
+                           SET Symbol=?,CompanyName=?,ISIN=?,MarketBoard=?,Flow=?,RawJson=?,
+                               IsActive=?,LastSyncedAt=?,UpdatedAt=?,InstrumentCodeIsPlaceholder=0
+                           WHERE MarketSymbolID=?""",
+                        *params, int(local_match[0]),
+                    )
+                    updated += 1
+                    continue
+
+                cur.execute(
+                    """INSERT INTO dbo.MarketSymbols
+                       (LocalSymbolID,InsCode,Symbol,CompanyName,ISIN,MarketBoard,Flow,RawJson,
+                        IsActive,LastSyncedAt,UpdatedAt,InstrumentCodeIsPlaceholder)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
+                    row["symbol_id"], ins_code, *params,
+                )
+                inserted += 1
+
+            if skipped or inserted + updated != len(rows):
+                raise RuntimeError(
+                    "Official TSETMC symbol transfer was incomplete; SQL Server transaction rolled back. "
+                    f"found={len(rows)}, inserted={inserted}, updated={updated}, skipped={skipped}"
+                )
+
+            # Any legacy placeholders not matched in this run are also hidden from
+            # active market consumers, while retaining their rows and history.
+            cur.execute(
+                """UPDATE dbo.MarketSymbols SET IsActive=0
+                   WHERE IsActive<>0
+                     AND (InstrumentCodeIsPlaceholder=1
+                          OR TRY_CONVERT(BIGINT,LTRIM(RTRIM(InsCode))) IS NULL)"""
+            )
             conn.commit()
         except Exception:
             conn.rollback()
             raise
-    return {"official_symbols_found": len(rows), "inserted_symbols": inserted, "updated_symbols": updated, "skipped_symbols": skipped}
 
+    return {
+        "official_symbols_found": len(rows),
+        "inserted_symbols": inserted,
+        "updated_symbols": updated,
+        "skipped_symbols": skipped,
+        "legacy_placeholders_archived": archived_legacy,
+    }
