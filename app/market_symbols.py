@@ -6,9 +6,7 @@ identities. This module only fetches official TSETMC InsCode records.
 import gzip
 import concurrent.futures
 import json
-import re
 import time
-import unicodedata
 import urllib.parse
 import urllib.request
 
@@ -183,93 +181,6 @@ def _fetch_legacy_market_watch():
 
 
 
-def _normalize_symbol_text(value):
-    """Normalize Persian/Arabic spelling variants for exact symbol matching."""
-    value = unicodedata.normalize("NFKC", str(value or ""))
-    value = value.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
-    value = value.replace("\u200c", "").replace("\u200f", "").replace("\u200e", "")
-    return re.sub(r"\s+", "", value).strip()
-
-
-def _fetch_missing_non_derivative_symbols_from_search(market_watch_codes):
-    """Supplement MarketWatch with exact TSETMC search matches for known non-derivative symbols.
-
-    The local registry supplies only the symbol names to search; identity and
-    metadata are accepted exclusively from exact TSETMC InstrumentSearch rows.
-    Suspended instruments are intentionally not filtered by trading status.
-    Derivatives are deferred to the separate derivatives integration step.
-    """
-    try:
-        from .authdb import connect
-        with connect() as db:
-            existing_rows = db.execute(
-                "SELECT ins_code, symbol, market_board FROM market_symbols "
-                "WHERE is_active=1 AND ins_code<>'' "
-                "AND ins_code NOT GLOB '*[^0-9]*'"
-            ).fetchall()
-    except Exception:
-        return []
-
-    missing_symbols = {}
-    for row in existing_rows:
-        code = str(row["ins_code"] or "").strip()
-        symbol = str(row["symbol"] or "").strip()
-        board = str(row["market_board"] or "")
-        if not code or code in market_watch_codes or not symbol:
-            continue
-        if "مشتقه" in board:
-            continue
-        normalized = _normalize_symbol_text(symbol)
-        if normalized:
-            missing_symbols.setdefault(normalized, symbol)
-
-    found = {}
-    for normalized, symbol in missing_symbols.items():
-        url = BASE + "/Instrument/GetInstrumentSearch/" + urllib.parse.quote(symbol, safe="")
-        try:
-            payload = _request_json(url, timeout=30)
-        except Exception:
-            continue
-
-        rows = payload
-        if isinstance(payload, dict):
-            rows = payload.get("instrumentSearch")
-            if rows is None:
-                rows = payload.get("InstrumentSearch")
-            if rows is None:
-                rows = payload
-
-        for row in _walk_dicts(rows):
-            instrument = row.get("instrument") if isinstance(row.get("instrument"), dict) else {}
-            merged = dict(row)
-            merged.update(instrument)
-
-            code = str(_first(merged, "insCode", "InsCode", "instrumentCode")).strip()
-            found_symbol = str(_first(
-                merged, "lVal18AFC", "symbol", "shortName", "Symbol"
-            )).strip()
-            if not code.isdigit() or code == "0":
-                continue
-            if _normalize_symbol_text(found_symbol) != normalized:
-                continue
-
-            found[code] = {
-                "ins_code": code,
-                "symbol": found_symbol,
-                "company_name": str(_first(
-                    merged, "lVal30", "companyName", "longName", "CompanyName"
-                )).strip(),
-                "isin": str(_first(merged, "cIsin", "insID", "isin", "ISIN")).strip(),
-                "market_board": _board(merged),
-                "flow": str(_first(merged, "flow", "flowCode")),
-                "source": "TSETMC",
-                "raw_json": json.dumps(row, ensure_ascii=False),
-            }
-
-        time.sleep(0.10)
-
-    return list(found.values())
-
 def _fetch_bulk_ins_codes():
     """Return the official InsCode universe exposed by TSETMC bulk parameters."""
     payload = _request_json(BASE + "/MarketData/GetInstValueAllInstAllParam", timeout=180)
@@ -434,7 +345,6 @@ def fetch_all_symbols():
     through GetInstrumentInfo with bounded concurrency. No snapshot is returned
     if any discovered InsCode remains unresolved.
     """
-    errors = []
     combined = {}
 
     # 1) Discover instruments independently of MarketWatch and the local database.
@@ -451,8 +361,9 @@ def fetch_all_symbols():
         related = _fetch_related_company_symbols()
         for code, row in related.items():
             combined[code] = row
-    except Exception as exc:
-        errors.append(f"گروه‌های صنعتی: {type(exc).__name__}: {exc}")
+    except Exception:
+        # InstrumentInfo below remains the authoritative fallback for bulk InsCodes.
+        pass
 
     # 4) MarketWatch adds current trading metadata but is not treated as complete.
     url = (
@@ -465,13 +376,15 @@ def fetch_all_symbols():
     try:
         for row in _normalize_api(_request_json(url, timeout=60)):
             combined[row["ins_code"]] = row
-    except Exception as exc:
-        errors.append(f"MarketWatch جدید: {type(exc).__name__}: {exc}")
+    except Exception:
+        # MarketWatch is supplementary; bulk discovery must remain independent.
+        pass
     try:
         for row in _fetch_legacy_market_watch():
             combined.setdefault(row["ins_code"], row)
-    except Exception as exc:
-        errors.append(f"MarketWatch قدیمی: {type(exc).__name__}: {exc}")
+    except Exception:
+        # Legacy MarketWatch is supplementary; do not block the bulk source.
+        pass
 
     # 5) Resolve every bulk InsCode not covered by MarketWatch, groups, or cache.
     missing = sorted(code for code in bulk_codes if code not in combined)
