@@ -4,6 +4,7 @@ Codal workbooks are consumers of this registry; they must never create symbol
 identities. This module only fetches official TSETMC InsCode records.
 """
 import gzip
+import concurrent.futures
 import json
 import re
 import time
@@ -269,6 +270,127 @@ def _fetch_missing_non_derivative_symbols_from_search(market_watch_codes):
 
     return list(found.values())
 
+def _fetch_bulk_ins_codes():
+    """Return the official InsCode universe exposed by TSETMC bulk parameters."""
+    payload = _request_json(BASE + "/MarketData/GetInstValueAllInstAllParam", timeout=180)
+    rows = payload.get("instValueAllInstAllParam", []) if isinstance(payload, dict) else []
+    codes = {str(row.get("insCode") or "").strip() for row in rows if isinstance(row, dict)}
+    codes = {code for code in codes if code.isdigit() and code != "0"}
+    if len(codes) < MIN_EXPECTED_MARKET_ROWS:
+        raise RuntimeError(f"پاسخ انبوه TSETMC ناقص یا نامعتبر است: {len(codes)} شناسه یکتا")
+    return codes
+
+
+def _normalize_instrument_info(payload, expected_code):
+    """Normalize a single GetInstrumentInfo response and verify its InsCode."""
+    item = payload.get("instrumentInfo") if isinstance(payload, dict) else None
+    if not isinstance(item, dict):
+        raise ValueError("ساختار instrumentInfo در پاسخ TSETMC معتبر نیست")
+    code = str(item.get("insCode") or "").strip()
+    symbol = str(item.get("lVal18AFC") or "").strip()
+    if code != str(expected_code) or not code.isdigit() or not symbol:
+        raise ValueError(f"مشخصات هویتی با InsCode درخواستی تطابق ندارد: {expected_code}")
+    flow = str(item.get("flow") if item.get("flow") is not None else "").strip()
+    board = str(item.get("flowTitle") or "").strip() or _board(item)
+    return {
+        "ins_code": code,
+        "symbol": symbol,
+        "company_name": str(item.get("lVal30") or "").strip(),
+        "isin": str(item.get("cIsin") or "").strip(),
+        "market_board": board,
+        "flow": flow,
+        "source": "TSETMC",
+        "raw_json": json.dumps(payload, ensure_ascii=False),
+    }
+
+
+def _fetch_one_instrument_info(code):
+    """Fetch one instrument identity with bounded retries."""
+    url = BASE + "/Instrument/GetInstrumentInfo/" + urllib.parse.quote(str(code), safe="")
+    last_error = None
+    for attempt in range(3):
+        try:
+            return _normalize_instrument_info(_request_json(url, timeout=30), code)
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.4 * (attempt + 1))
+    raise RuntimeError(f"{code}: {type(last_error).__name__}: {last_error}")
+
+
+def _fetch_related_company_symbols():
+    """Fetch supplementary instrument metadata from all published industrial groups."""
+    payload = _request_json(BASE + "/StaticData/GetStaticData", timeout=60)
+    static_rows = payload.get("staticData", []) if isinstance(payload, dict) else []
+    groups = [row for row in static_rows if isinstance(row, dict) and row.get("type") == "IndustrialGroup"]
+    found = {}
+    errors = []
+    for group in groups:
+        group_code = str(group.get("code") or "").strip()
+        if not group_code:
+            continue
+        try:
+            data = _request_json(BASE + "/ClosingPrice/GetRelatedCompany/" + urllib.parse.quote(group_code, safe=""), timeout=30)
+            rows = data.get("relatedCompany", []) if isinstance(data, dict) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                instrument = row.get("instrument") if isinstance(row.get("instrument"), dict) else {}
+                merged = dict(row)
+                merged.update(instrument)
+                code = str(_first(merged, "insCode", "InsCode")).strip()
+                symbol = str(_first(merged, "lVal18AFC", "symbol")).strip()
+                if not code.isdigit() or code == "0" or not symbol:
+                    continue
+                found[code] = {
+                    "ins_code": code, "symbol": symbol,
+                    "company_name": str(_first(merged, "lVal30", "companyName")).strip(),
+                    "isin": str(_first(merged, "cIsin", "isin")).strip(),
+                    "market_board": _board(merged),
+                    "flow": str(_first(merged, "flow", "flowCode")),
+                    "source": "TSETMC",
+                    "raw_json": json.dumps(row, ensure_ascii=False),
+                }
+        except Exception as exc:
+            errors.append(f"{group_code}: {type(exc).__name__}: {exc}")
+    if not found and errors:
+        raise RuntimeError("دریافت اطلاعات گروه‌های صنعتی ناموفق بود: " + "؛ ".join(errors[:5]))
+    return found
+
+
+def _load_cached_symbol_rows():
+    """Read existing official identities as a recovery/cache layer, never as discovery."""
+    try:
+        from .authdb import connect
+        with connect() as db:
+            rows = db.execute(
+                "SELECT ins_code,symbol,company_name,isin,market_board,flow,raw_json "
+                "FROM market_symbols WHERE ins_code<>'' AND ins_code NOT GLOB '*[^0-9]*'"
+            ).fetchall()
+        return {str(row["ins_code"]): {
+            "ins_code": str(row["ins_code"]), "symbol": str(row["symbol"] or ""),
+            "company_name": str(row["company_name"] or ""), "isin": str(row["isin"] or ""),
+            "market_board": str(row["market_board"] or "نامشخص"), "flow": str(row["flow"] or ""),
+            "source": "TSETMC", "raw_json": str(row["raw_json"] or "{}"),
+        } for row in rows if str(row["symbol"] or "").strip()}
+    except Exception:
+        return {}
+
+
+def _fetch_missing_instrument_info(codes, max_workers=6):
+    """Fetch missing instrument metadata with bounded concurrency and retries."""
+    found = []
+    errors = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_fetch_one_instrument_info, code): code for code in sorted(codes)}
+        for future in concurrent.futures.as_completed(futures):
+            code = futures[future]
+            try:
+                found.append(future.result())
+            except Exception as exc:
+                errors.append(str(exc))
+    return found, errors
+
 def _previous_official_count():
     """Read the last local official-universe size for truncation detection."""
     try:
@@ -304,15 +426,35 @@ def _validate_full_snapshot(rows, previous_count=0):
 
 
 def fetch_all_symbols():
-    """Fetch the full instrument universe from TSETMC endpoints only.
+    """Discover the broad TSETMC instrument universe and resolve official identities.
 
-    The new and legacy TSETMC endpoints are both queried. Their official
-    InsCode sets are combined so a partial response from one endpoint does
-    not silently hide instruments returned by the other. Excel files,
-    Downloads folders and Codal reports are never used as fallbacks.
+    Bulk parameter InsCodes are the discovery source. MarketWatch and industrial
+    group responses supplement metadata and coverage; cached SQLite identities
+    are used only for already-known InsCodes. Missing identities are resolved
+    through GetInstrumentInfo with bounded concurrency. No snapshot is returned
+    if any discovered InsCode remains unresolved.
     """
     errors = []
-    snapshots = []
+    combined = {}
+
+    # 1) Discover instruments independently of MarketWatch and the local database.
+    bulk_codes = _fetch_bulk_ins_codes()
+
+    # 2) Reuse already-known identities for codes in the bulk universe.
+    cached = _load_cached_symbol_rows()
+    for code in bulk_codes:
+        if code in cached:
+            combined[code] = cached[code]
+
+    # 3) Supplement discovery/metadata from industrial groups.
+    try:
+        related = _fetch_related_company_symbols()
+        for code, row in related.items():
+            combined[code] = row
+    except Exception as exc:
+        errors.append(f"گروه‌های صنعتی: {type(exc).__name__}: {exc}")
+
+    # 4) MarketWatch adds current trading metadata but is not treated as complete.
     url = (
         BASE + "/ClosingPrice/GetMarketWatch?market=0&industrialGroup="
         "&paperTypes%5B0%5D=1&paperTypes%5B1%5D=2&paperTypes%5B2%5D=3"
@@ -320,44 +462,38 @@ def fetch_all_symbols():
         "&paperTypes%5B6%5D=7&paperTypes%5B7%5D=8&paperTypes%5B8%5D=9"
         "&showTraded=false&withBestLimits=false&hEven=0&RefID=0"
     )
-
     try:
-        rows = _normalize_api(_request_json(url, timeout=60))
-        if rows:
-            snapshots.append(("new_api", rows))
-        else:
-            errors.append("API جدید TSETMC هیچ رکورد قابل‌شناسایی برنگرداند.")
+        for row in _normalize_api(_request_json(url, timeout=60)):
+            combined[row["ins_code"]] = row
     except Exception as exc:
-        errors.append(f"API جدید TSETMC: {type(exc).__name__}: {exc}")
-
+        errors.append(f"MarketWatch جدید: {type(exc).__name__}: {exc}")
     try:
-        rows = _fetch_legacy_market_watch()
-        if rows:
-            snapshots.append(("legacy_api", rows))
+        for row in _fetch_legacy_market_watch():
+            combined.setdefault(row["ins_code"], row)
     except Exception as exc:
-        errors.append(f"API قدیمی TSETMC: {type(exc).__name__}: {exc}")
+        errors.append(f"MarketWatch قدیمی: {type(exc).__name__}: {exc}")
 
-    if not snapshots:
+    # 5) Resolve every bulk InsCode not covered by MarketWatch, groups, or cache.
+    missing = sorted(code for code in bulk_codes if code not in combined)
+    if missing:
+        resolved, info_errors = _fetch_missing_instrument_info(missing)
+        for row in resolved:
+            combined[row["ins_code"]] = row
+        if info_errors:
+            unresolved = [code for code in missing if code not in combined]
+            sample = "؛ ".join(info_errors[:8])
+            raise RuntimeError(
+                f"تکمیل مشخصات هویتی کامل نشد: {len(unresolved)} از {len(bulk_codes)} شناسه حل‌نشده است. "
+                f"نمونه خطاها: {sample}. هیچ Snapshot ناقصی برای ثبت برگردانده نشد."
+            )
+
+    # Any supplemental rows outside the bulk source are retained, but the bulk
+    # source itself must be fully represented before the snapshot is accepted.
+    unresolved = sorted(code for code in bulk_codes if code not in combined)
+    if unresolved:
         raise RuntimeError(
-            "دریافت فهرست نمادها فقط از APIهای TSETMC ناموفق بود؛ "
-            + "؛ ".join(errors)
+            f"فهرست ابزارها ناقص است: {len(unresolved)} شناسه از منبع انبوه مشخصات هویتی ندارند؛ ثبت متوقف شد."
         )
-
-    # Prefer the new API's richer metadata; add any official InsCode that
-    # appears only in the legacy TSETMC response.
-    combined = {}
-    for source, rows in snapshots:
-        for row in rows:
-            code = str(row["ins_code"])
-            if code not in combined or source == "new_api":
-                combined[code] = row
-
-    market_watch_codes = set(combined)
-    supplemental_rows = _fetch_missing_non_derivative_symbols_from_search(
-        market_watch_codes
-    )
-    for row in supplemental_rows:
-        combined.setdefault(str(row["ins_code"]), row)
 
     result = list(combined.values())
     _validate_full_snapshot(result, _previous_official_count())
